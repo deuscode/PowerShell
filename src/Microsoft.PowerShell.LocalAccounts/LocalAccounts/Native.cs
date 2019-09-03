@@ -1,4 +1,7 @@
-﻿using System;
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+using System;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -123,7 +126,7 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
 
         public UNICODE_STRING(string s)
         {
-            buffer = String.IsNullOrEmpty(s) ? String.Empty : s;
+            buffer = string.IsNullOrEmpty(s) ? string.Empty : s;
             Length = (UInt16)(2 * buffer.Length);
             MaximumLength = Length;
         }
@@ -134,7 +137,7 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
             // often have buffers that point to junk if Length = 0, or that
             // point to non-null-terminated strings, resulting in marshaled
             // String objects that have more characters than they should.
-            return Length == 0 ? String.Empty
+            return Length == 0 ? string.Empty
                                : buffer.Substring(0, Length / 2);
         }
     }
@@ -161,7 +164,6 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
             }
         }
     }
-
 
 // These structures are filled in by Marshalling, so fields will be initialized
 // invisibly to the C# compiler, and some fields will not be used in C# code.
@@ -195,7 +197,6 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
         internal const UInt32 STANDARD_RIGHTS_WRITE     = READ_CONTROL;
         internal const UInt32 STANDARD_RIGHTS_EXECUTE   = READ_CONTROL;
 
-
         internal const UInt32 STANDARD_RIGHTS_ALL       = 0x001F0000;
 
         internal const UInt32 SPECIFIC_RIGHTS_ALL       = 0x0000FFFF;
@@ -208,7 +209,6 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
         internal const UInt32 GENERIC_WRITE             = 0x40000000;
         internal const UInt32 GENERIC_EXECUTE           = 0x20000000;
         internal const UInt32 GENERIC_ALL               = 0x10000000;
-
 
         // These constants control the behavior of the FormatMessage Windows API function
         internal const uint FORMAT_MESSAGE_ALLOCATE_BUFFER  = 0x00000100;
@@ -335,7 +335,6 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
         internal const int NERR_LastAdmin               = NERR_BASE + 352;  // This operation is not allowed on the last administrative account.
         #endregion Win32 Error Codes
 
-
         #region SECURITY_DESCRIPTOR Control Flags
         internal const UInt16 SE_DACL_PRESENT           = 0x0004;
         internal const UInt16 SE_SELF_RELATIVE          = 0x8000;
@@ -348,6 +347,7 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
 
         #region Win32 Functions
         [DllImport(PInvokeDllNames.LookupAccountSidDllName, CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool LookupAccountSid(string systemName,
                                                      byte[] accountSid,
                                                      StringBuilder accountName,
@@ -357,6 +357,7 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
                                                      out SID_NAME_USE use);
 
         [DllImport(PInvokeDllNames.LookupAccountNameDllName, CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool LookupAccountName(string systemName,
                                                       string accountName,
                                                       [MarshalAs(UnmanagedType.LPArray)]
@@ -365,7 +366,6 @@ namespace System.Management.Automation.SecurityAccountsManager.Native
                                                       StringBuilder domainName,
                                                       ref uint domainNameLength,
                                                       out SID_NAME_USE peUse);
-
 
         [DllImport(PInvokeDllNames.GetSecurityDescriptorDaclDllName, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

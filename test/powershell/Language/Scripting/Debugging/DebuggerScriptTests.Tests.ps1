@@ -1,8 +1,5 @@
-﻿##
-## Copyright (c) Microsoft Corporation. All rights reserved.
-##
-## Script debugging tests
-##
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
 
 Describe "Breakpoints set on custom FileSystem provider files should work" -Tags "CI" {
     #
@@ -35,24 +32,23 @@ Describe "Breakpoints set on custom FileSystem provider files should work" -Tags
         #
         # Verify that the breakpoint is hit when using the provider
         #
-        pushd tmpTestA1:\
+        Push-Location tmpTestA1:\
         $breakpoint = set-psbreakpoint .\$scriptName 1 -action { continue }
         & .\$scriptName
 
 	    It "Breakpoint hit count" {
-		    $breakpoint.HitCount | Should Be 1
+		    $breakpoint.HitCount | Should -Be 1
 	    }
     }
     finally
     {
-        popd
+        Pop-Location
 
         if ($null -ne $breakpoint) { $breakpoint | remove-psbreakpoint }
         if (Test-Path $scriptFullName) { Remove-Item $scriptFullName -Force }
-        if ($null -ne (Get-PSDrive -Name tmpTestA1 2>$null)) { Remove-PSDrive -Name tmpTestA1 -Force }
+        if ($null -ne (Get-PSDrive -Name tmpTestA1 2> $null)) { Remove-PSDrive -Name tmpTestA1 -Force }
     }
 }
-
 
 Describe "Tests line breakpoints on dot-sourced files" -Tags "CI" {
     #
@@ -93,12 +89,12 @@ Describe "Tests line breakpoints on dot-sourced files" -Tags "CI" {
         #
         # Set the breakpoint and verify it is hit
         #
-        $breakpoint = sbp $scriptFile 17 -action { continue; }
+        $breakpoint = Set-PsBreakpoint $scriptFile 17 -action { continue; }
 
         & $scriptFile
 
 	    It "Breakpoint on recursive function hit count" {
-		    $breakpoint.HitCount | Should BeGreaterThan 0
+		    $breakpoint.HitCount | Should -BeGreaterThan 0
 	    }
     }
     finally
@@ -107,7 +103,6 @@ Describe "Tests line breakpoints on dot-sourced files" -Tags "CI" {
         if (Test-Path $scriptFile) { Remove-Item -Path $scriptFile -Force }
     }
 }
-
 
 Describe "Function calls clear debugger cache too early" -Tags "CI" {
     #
@@ -142,17 +137,17 @@ Describe "Function calls clear debugger cache too early" -Tags "CI" {
         #
         # Set the breakpoints and verify they are hit
         #
-        $breakpoint1 = sbp $scriptFile 7 -action { continue; }
-        $breakpoint2 = sbp $scriptFile 9 -action { continue; }
+        $breakpoint1 = Set-PsBreakpoint $scriptFile 7 -action { continue; }
+        $breakpoint2 = Set-PsBreakpoint $scriptFile 9 -action { continue; }
 
         & $scriptFile
 
 	    It "Breakpoint before function call count" {
-		    $breakpoint1.HitCount | Should Be 1
+		    $breakpoint1.HitCount | Should -Be 1
 	    }
 
 	    It "Breakpoint after function call count" {
-		    $breakpoint2.HitCount | Should Be 1
+		    $breakpoint2.HitCount | Should -Be 1
 	    }
     }
     finally
@@ -162,7 +157,6 @@ Describe "Function calls clear debugger cache too early" -Tags "CI" {
         if (Test-Path $scriptFile) { Remove-Item $scriptFile -Force }
     }
 }
-
 
 Describe "Line breakpoints on commands in multi-line pipelines" -Tags "CI" {
     #
@@ -186,20 +180,20 @@ Describe "Line breakpoints on commands in multi-line pipelines" -Tags "CI" {
         get-unique
 '@
 
-        $breakpoints = sbp $script 1,2,3 -action { continue }
+        $breakpoints = Set-PsBreakpoint $script 1,2,3 -action { continue }
 
         $null = & $script
 
 	    It "Breakpoint on line 1 hit count" {
-		    $breakpoints[0].HitCount | Should Be 1
+		    $breakpoints[0].HitCount | Should -Be 1
 	    }
 
 	    It "Breakpoint on line 2 hit count" {
-		    $breakpoints[1].HitCount | Should Be 3
+		    $breakpoints[1].HitCount | Should -Be 3
 	    }
 
 	    It "Breakpoint on line 3 hit count" {
-		    $breakpoints[2].HitCount | Should Be 1
+		    $breakpoints[2].HitCount | Should -Be 1
 	    }
     }
     finally
@@ -207,10 +201,9 @@ Describe "Line breakpoints on commands in multi-line pipelines" -Tags "CI" {
         if ($null -ne $breakpoints) { $breakpoints | remove-psbreakpoint }
         if (Test-Path $script)
         {
-            del $script -Force
+            Remove-Item $script -Force
         }
     }
-
 
     Context "COM TESTS" {
         # DRT for 133807 SetBreakpointWithShortPath
@@ -225,7 +218,7 @@ Describe "Line breakpoints on commands in multi-line pipelines" -Tags "CI" {
             $f = $a.GetFile($scriptPath1)
             $scriptPath2 = $f.ShortPath
 
-            $breakpoints = sbp $scriptPath2 1,2,3 -action { continue }
+            $breakpoints = Set-PsBreakpoint $scriptPath2 1,2,3 -action { continue }
             $null = & $scriptPath2
         }
 
@@ -235,19 +228,18 @@ Describe "Line breakpoints on commands in multi-line pipelines" -Tags "CI" {
         }
 
         It "Short path Breakpoint on line 1 hit count" -skip:$IsCoreCLR {
-            $breakpoints[0].HitCount | Should Be 1
+            $breakpoints[0].HitCount | Should -Be 1
         }
 
         It "Short path Breakpoint on line 2 hit count" -skip:$IsCoreCLR {
-            $breakpoints[1].HitCount | Should Be 3
+            $breakpoints[1].HitCount | Should -Be 3
         }
 
         It "Short path Breakpoint on line 3 hit count" -skip:$IsCoreCLR {
-            $breakpoints[2].HitCount | Should Be 1
+            $breakpoints[2].HitCount | Should -Be 1
         }
     }
 }
-
 
 Describe "Unit tests for various script breakpoints" -Tags "CI" {
     #
@@ -269,14 +261,14 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
     {
         $actual = @(& $command)
 
-	    It "Script breakpoint count" {
-		    $actual.Count | Should Be $expected.Count
+	    It "Script breakpoint count '${command}'|${expected}" {
+		    $actual.Count | Should -Be $expected.Count
 	    }
 
         foreach ($breakpoint in $actual)
         {
-	        It "Expected script breakpoints" {
-		        ($expected -contains $breakpoint) | Should Be $true
+	        It "Expected script breakpoints '${command}|${breakpoint}'" {
+		        ($expected -contains $breakpoint) | Should -BeTrue
 	        }
         }
     }
@@ -286,18 +278,8 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
     #
     function VerifyException([ScriptBlock] $command, [string] $exception)
     {
-        try
-        {
-            & $command
-
-            throw "No Exception!"
-        }
-        catch
-        {
-            It "Script failed expected exception" {
-                $_.Exception.GetType().Name | Should Be $exception
-            }
-        }
+        $e = { & $command } | Should -Throw -PassThru
+        $e.Exception.GetType().Name | Should -Be $exception
     }
 
     #
@@ -308,7 +290,7 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
         #
         # Ensure there are no breakpoints at start of test
         #
-        gbp | rbp
+        Get-PsBreakpoint | Remove-PsBreakpoint
 
         #
         # Create a couple of scripts
@@ -322,16 +304,16 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
         #
         # Set several breakpoints of different types
         #
-        $line1 = sbp $scriptFile1 1
-        $line2 = sbp $scriptFile2 2
+        $line1 = Set-PsBreakpoint $scriptFile1 1
+        $line2 = Set-PsBreakpoint $scriptFile2 2
 
-        $cmd1 = sbp -c command1 -s $scriptFile1
-        $cmd2 = sbp -c command2 -s $scriptFile2
-        $cmd3 = sbp -c command3
+        $cmd1 = Set-PsBreakpoint -c command1 -s $scriptFile1
+        $cmd2 = Set-PsBreakpoint -c command2 -s $scriptFile2
+        $cmd3 = Set-PsBreakpoint -c command3
 
-        $var1 = sbp -v variable1 -s $scriptFile1
-        $var2 = sbp -v variable2 -s $scriptFile2
-        $var3 = sbp -v variable3
+        $var1 = Set-PsBreakpoint -v variable1 -s $scriptFile1
+        $var2 = Set-PsBreakpoint -v variable2 -s $scriptFile2
+        $var3 = Set-PsBreakpoint -v variable3
 
         #
         # The default parameter set must return all breakpoints
@@ -362,9 +344,9 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
         $directoryName = [System.IO.Path]::GetDirectoryName($scriptFile1)
         $fileName = [System.IO.Path]::GetFileName($scriptFile1)
 
-        pushd $directoryName
+        Push-Location $directoryName
         Verify { get-psbreakpoint -script $fileName } $line1,$cmd1,$var1
-        popd
+        Pop-Location
 
         #
         # Query by Type
@@ -410,7 +392,6 @@ Describe "Unit tests for various script breakpoints" -Tags "CI" {
         if (Test-Path $scriptFile2) { Remove-Item $scriptFile2 -Force }
     }
 }
-
 
 Describe "Unit tests for line breakpoints on dot-sourced files" -Tags "CI" {
     #
@@ -469,9 +450,9 @@ Describe "Unit tests for line breakpoints on dot-sourced files" -Tags "CI" {
         #
         # Set a couple of line breakpoints on the file, dot-source it and verify that the breakpoints are hit
         #
-        $breakpoint1 = sbp $scriptFile 4 -action { continue; }
-        $breakpoint2 = sbp $scriptFile 9 -action { continue; }
-        $breakpoint3 = sbp $scriptFile 24 -action { continue; }
+        $breakpoint1 = Set-PsBreakpoint $scriptFile 4 -action { continue; }
+        $breakpoint2 = Set-PsBreakpoint $scriptFile 9 -action { continue; }
+        $breakpoint3 = Set-PsBreakpoint $scriptFile 24 -action { continue; }
 
         . $scriptFile
 
@@ -479,15 +460,15 @@ Describe "Unit tests for line breakpoints on dot-sourced files" -Tags "CI" {
         Get-TestCmdlet
 
 	    It "Breakpoint on function hit count" {
-		    $breakpoint1.HitCount | Should Be 1
+		    $breakpoint1.HitCount | Should -Be 1
 	    }
 
 	    It "Breakpoint on uncalled function hit count" {
-		    $breakpoint2.HitCount | Should Be 0
+		    $breakpoint2.HitCount | Should -Be 0
 	    }
 
 	    It "Breakpoint on cmdlet hit count" {
-		    $breakpoint3.HitCount | Should Be 1
+		    $breakpoint3.HitCount | Should -Be 1
 	    }
     }
     finally
@@ -498,7 +479,6 @@ Describe "Unit tests for line breakpoints on dot-sourced files" -Tags "CI" {
         if (Test-Path $scriptFile) { Remove-Item $scriptFile -Force }
     }
 }
-
 
 Describe "Unit tests for line breakpoints on modules" -Tags "CI" {
     #
@@ -518,7 +498,7 @@ Describe "Unit tests for line breakpoints on modules" -Tags "CI" {
         $moduleDirectory = [io.path]::Combine($moduleRoot, $moduleName)
         $moduleFile = [io.path]::Combine($moduleDirectory, $moduleName + ".psm1")
 
-        mkdir $moduleDirectory 2> $null
+        New-Item -ItemType Directory $moduleDirectory 2> $null
 
         write-output '
         function ModuleFunction1
@@ -567,29 +547,29 @@ Describe "Unit tests for line breakpoints on modules" -Tags "CI" {
         #
         # Set a couple of line breakpoints on the module and verify that they are hit
         #
-        $breakpoint1 = sbp $moduleFile 4 -action { continue }
-        $breakpoint2 = sbp $moduleFile 9 -action { continue }
-        $breakpoint3 = sbp $moduleFile 24 -Action { continue }
-        $breakpoint4 = sbp $moduleFile 25 -Action { continue }
+        $breakpoint1 = Set-PsBreakpoint $moduleFile 4 -action { continue }
+        $breakpoint2 = Set-PsBreakpoint $moduleFile 9 -action { continue }
+        $breakpoint3 = Set-PsBreakpoint $moduleFile 24 -Action { continue }
+        $breakpoint4 = Set-PsBreakpoint $moduleFile 25 -Action { continue }
 
         ModuleFunction1
 
         Get-ModuleCmdlet
 
 	    It "Breakpoint1 on module function hit count" {
-		    $breakpoint1.HitCount | Should Be 1
+		    $breakpoint1.HitCount | Should -Be 1
 	    }
 
 	    It "Breakpoint2 on uncalled module function hit count" {
-		    $breakpoint2.HitCount | Should Be 0
+		    $breakpoint2.HitCount | Should -Be 0
 	    }
 
 	    It "Breakpoint3 on module cmdlet hit count" {
-		    $breakpoint3.HitCount | Should Be 1
+		    $breakpoint3.HitCount | Should -Be 1
 	    }
 
 	    It "Breakpoint4 on module cmdlet hit count" {
-		    $breakpoint4.HitCount | Should Be 1
+		    $breakpoint4.HitCount | Should -Be 1
 	    }
     }
     finally
@@ -600,10 +580,9 @@ Describe "Unit tests for line breakpoints on modules" -Tags "CI" {
         if ($null -ne $breakpoint3) { Remove-PSBreakpoint $breakpoint3 }
         if ($null -ne $breakpoint4) { Remove-PSBreakpoint $breakpoint4 }
         get-module $moduleName | remove-module
-        if (Test-Path $moduleDirectory) { Remove-Item $moduleDirectory -r -force -ea silentlycontinue }
+        if (Test-Path $moduleDirectory) { Remove-Item $moduleDirectory -Recurse -force -ErrorAction silentlycontinue }
     }
 }
-
 
 Describe "Sometimes line breakpoints are ignored" -Tags "CI" {
     #####################################################################################
@@ -645,14 +624,14 @@ Describe "Sometimes line breakpoints are ignored" -Tags "CI" {
         & $tempFileName1
 
 	    It "Breakpoint 1 hit count" {
-		    $bp1.HitCount | Should Be 6
+		    $bp1.HitCount | Should -Be 6
 	    }
 
         $bp2 = Set-PSBreakpoint -Script $tempFileName2 -Line 3 -Action {continue}
         & $tempFileName2
 
 	    It "Breakpoint 2 hit count" {
-		    $bp2.HitCount | Should Be 6
+		    $bp2.HitCount | Should -Be 6
 	    }
     }
     finally

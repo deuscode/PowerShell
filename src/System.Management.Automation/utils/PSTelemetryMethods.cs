@@ -1,7 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 #if LEGACYTELEMETRY
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
 
 using System;
 using System.Collections.Generic;
@@ -20,7 +19,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
     [SuppressMessage("Microsoft.MSInternal", "CA903:InternalNamespaceShouldNotContainPublicTypes")]
     public static class TelemetryAPI
     {
-        #region Public API
+#region Public API
 
         /// <summary>
         /// Public API to expose Telemetry in PowerShell
@@ -32,7 +31,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
             TelemetryWrapper.TraceMessage(message, arguments);
         }
 
-        #endregion
+#endregion
 
         private static int s_anyPowerShellSessionOpen;
         private static DateTime s_sessionStartTime;
@@ -81,6 +80,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
                     ProcessName = hostName,
                 });
             }
+
             s_sessionStartTime = DateTime.Now;
         }
 
@@ -125,7 +125,6 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         {
             TelemetryWrapper.TraceMessage("PSGetCommandFailed", new { TimeInMS = timeInMS, CommandNames = name });
         }
-
 
         private static long[] s_tabCompletionTimes = new long[(int)CompletionResultType.DynamicKeyword + 1];
         private static int[] s_tabCompletionCounts = new int[(int)CompletionResultType.DynamicKeyword + 1];
@@ -180,7 +179,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         /// <summary>
-        /// Report that a new local session (runspace) is created
+        /// Report that a new local session (runspace) is created.
         /// </summary>
         internal static void ReportLocalSessionCreated(
             System.Management.Automation.Runspaces.InitialSessionState iss,
@@ -215,7 +214,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         /// <summary>
-        /// Report that a new remote session (runspace) is created
+        /// Report that a new remote session (runspace) is created.
         /// </summary>
         internal static void ReportRemoteSessionCreated(
             System.Management.Automation.Runspaces.RunspaceConnectionInfo connectionInfo)
@@ -246,6 +245,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
                             configurationName = configurationName.Substring(index + 1);
                         }
                     }
+
                     configurationType = GetConfigurationTypefromName(configurationName);
                 }
                 else
@@ -312,7 +312,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         private static readonly int s_promptHashCode = "prompt".GetHashCode();
 
         /// <summary>
-        /// Report some telemetry about the scripts that are run
+        /// Report some telemetry about the scripts that are run.
         /// </summary>
         internal static void ReportScriptTelemetry(Ast ast, bool dotSourced, long compileTimeInMS)
         {
@@ -395,7 +395,9 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal Dictionary<string, int> CommandsCalled { get; private set; }
+
         internal int CountOfCommands { get; private set; }
+
         internal int CountOfDotSourcedCommands { get; private set; }
 
         public override AstVisitAction VisitCommand(CommandAst commandAst)
@@ -416,8 +418,11 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int MaxStringSize { get; private set; }
+
         internal int StringLiteralCount { get; private set; }
+
         internal int StringLiteralCumulativeSize { get; private set; }
+
         public override AstVisitAction VisitStringConstantExpression(StringConstantExpressionAst stringConstantExpressionAst)
         {
             var stringSize = stringConstantExpressionAst.Value.Length;
@@ -437,8 +442,11 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int MaxArraySize { get; private set; }
+
         internal int ArrayLiteralCount { get; private set; }
+
         internal int ArrayLiteralCumulativeSize { get; private set; }
+
         public override AstVisitAction VisitArrayLiteral(ArrayLiteralAst arrayLiteralAst)
         {
             var elementCount = arrayLiteralAst.Elements.Count;
@@ -449,6 +457,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int StatementCount { get; private set; }
+
         public override AstVisitAction VisitBlockStatement(BlockStatementAst blockStatementAst)
         {
             StatementCount += blockStatementAst.Body.Statements.Count;
@@ -462,6 +471,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int FunctionCount { get; private set; }
+
         public override AstVisitAction VisitFunctionDefinition(FunctionDefinitionAst functionDefinitionAst)
         {
             FunctionCount += 1;
@@ -469,6 +479,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int ScriptBlockCount { get; private set; }
+
         public override AstVisitAction VisitScriptBlockExpression(ScriptBlockExpressionAst scriptBlockExpressionAst)
         {
             ScriptBlockCount += 1;
@@ -476,7 +487,9 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int MaxPipelineDepth { get; private set; }
+
         internal int PipelineCount { get; private set; }
+
         public override AstVisitAction VisitPipeline(PipelineAst pipelineAst)
         {
             MaxPipelineDepth = Math.Max(MaxPipelineDepth, pipelineAst.PipelineElements.Count);
@@ -485,7 +498,9 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         }
 
         internal int ClassCount { get; private set; }
+
         internal int EnumCount { get; private set; }
+
         public override AstVisitAction VisitTypeDefinition(TypeDefinitionAst typeDefinitionAst)
         {
             if (typeDefinitionAst.IsClass)

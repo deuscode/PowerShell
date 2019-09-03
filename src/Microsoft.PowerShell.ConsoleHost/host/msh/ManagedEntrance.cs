@@ -1,26 +1,25 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
-using System.Reflection;
+using System.Globalization;
 using System.Management.Automation;
 using System.Management.Automation.Internal;
 using System.Management.Automation.Runspaces;
 using System.Management.Automation.Tracing;
-using System.Globalization;
-using System.Threading;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Microsoft.PowerShell
 {
     /// <summary>
-    /// Defines an entry point from unmanaged code to managed Msh
+    /// Defines an entry point from unmanaged code to managed Msh.
     /// </summary>
     public sealed class UnmanagedPSEntry
     {
         /// <summary>
-        /// Starts managed MSH
+        /// Starts managed MSH.
         /// </summary>
         /// <param name="consoleFilePath">
         /// Deprecated: Console file used to create a runspace configuration to start MSH
@@ -28,22 +27,20 @@ namespace Microsoft.PowerShell
         /// <param name="args">
         /// Command line arguments to the managed MSH
         /// </param>
-#pragma warning disable 1573
+        /// <param name="argc" />
         public static int Start(string consoleFilePath, [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPWStr, SizeParamIndex = 2)]string[] args, int argc)
-#pragma warning restore 1573
         {
+            // Warm up some components concurrently on background threads.
             System.Management.Automation.Runspaces.EarlyStartup.Init();
 
-            // Set ETW activity Id
-            Guid activityId = EtwActivity.GetActivityId();
+            // We need to read the settings file before we create the console host
+            Microsoft.PowerShell.CommandLineParameterParser.EarlyParse(args);
 
-            if (activityId == Guid.Empty)
-            {
-                EtwActivity.SetActivityId(EtwActivity.CreateActivityId());
-            }
-
-            PSEtwLog.LogOperationalInformation(PSEventId.Perftrack_ConsoleStartupStart, PSOpcode.WinStart,
-                PSTask.PowershellConsoleStartup, PSKeyword.UseAlwaysOperational);
+#if !UNIX
+            // NOTE: On Unix, logging has to be deferred until after command-line parsing
+            // complete. On Windows, deferring the call is not needed.
+            PSEtwLog.LogConsoleStartup();
+#endif
 
             // Windows Vista and later support non-traditional UI fallback ie., a
             // user on an Arabic machine can choose either French or English(US) as
@@ -56,17 +53,17 @@ namespace Microsoft.PowerShell
             Thread.CurrentThread.CurrentCulture = NativeCultureResolver.Culture;
 
 #if DEBUG
-            if (args.Length > 0 && !String.IsNullOrEmpty(args[0]) && args[0].Equals("-isswait", StringComparison.OrdinalIgnoreCase))
+            if (args.Length > 0 && !string.IsNullOrEmpty(args[0]) && args[0].Equals("-isswait", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine("Attach the debugger to continue...");
-                while (!System.Diagnostics.Debugger.IsAttached) {
+                while (!System.Diagnostics.Debugger.IsAttached)
+                {
                     Thread.Sleep(100);
                 }
+
                 System.Diagnostics.Debugger.Break();
             }
 #endif
-            ConsoleHost.DefaultInitialSessionState = InitialSessionState.CreateDefault2();
-
             int exitCode = 0;
             try
             {
@@ -74,7 +71,7 @@ namespace Microsoft.PowerShell
                 var formattedBanner = string.Format(CultureInfo.InvariantCulture, banner, PSVersionInfo.GitCommitId);
                 exitCode = Microsoft.PowerShell.ConsoleShell.Start(
                     formattedBanner,
-                    ManagedEntranceStrings.ShellHelp,
+                    ManagedEntranceStrings.UsageHelp,
                     args);
             }
             catch (System.Management.Automation.Host.HostException e)
@@ -91,12 +88,14 @@ namespace Microsoft.PowerShell
                         return exitCode;
                     }
                 }
+
                 System.Environment.FailFast(e.Message, e);
             }
             catch (Exception e)
             {
                 System.Environment.FailFast(e.Message, e);
             }
+
             return exitCode;
         }
     }

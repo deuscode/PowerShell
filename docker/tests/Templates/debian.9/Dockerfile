@@ -1,9 +1,10 @@
 FROM debian:stretch
 
-ARG PSVERSIONSTUB
-ARG PSVERSIONSTUBRPM
-ARG PACKAGELOCATIONSTUB
-ARG TESTLISTSTUB
+ARG PACKAGENAME
+ARG PACKAGELOCATION
+ARG PREVIEWSUFFIX=
+ARG TESTLIST=/PowerShell/test/powershell/Modules/PackageManagement/PackageManagement.Tests.ps1,/PowerShell/test/powershell/engine/Module
+ARG TESTDOWNLOADCOMMAND="git clone --recursive https://github.com/PowerShell/PowerShell.git"
 
 # Install dependencies
 RUN apt-get update \
@@ -13,15 +14,16 @@ RUN apt-get update \
         curl \
         apt-transport-https \
         locales \
-        git
+        git \
+    && apt-get clean
 
 # Setup the locale
 ENV LANG en_US.UTF-8
 ENV LC_ALL $LANG
 RUN locale-gen $LANG && update-locale
 
-RUN curl -L -o powershell_$PSVERSIONSTUB-1.debian.9_amd64.deb $PACKAGELOCATIONSTUB/powershell_$PSVERSIONSTUB-1.debian.9_amd64.deb
-RUN dpkg -i powershell_$PSVERSIONSTUB-1.debian.9_amd64.deb || :
-RUN apt-get install -y -f
-RUN git clone --recursive https://github.com/PowerShell/PowerShell.git
-RUN pwsh -c "Import-Module /PowerShell/build.psm1;Restore-PSPester -Destination /usr/local/share/powershell/Modules;exit (Invoke-Pester $TESTLISTSTUB -PassThru).FailedCount"
+RUN curl -L -o $PACKAGENAME $PACKAGELOCATION/$PACKAGENAME
+RUN dpkg -i $PACKAGENAME || :
+RUN apt-get install -y -f --no-install-recommends
+RUN $TESTDOWNLOADCOMMAND
+RUN pwsh$PREVIEWSUFFIX -c "Import-Module /PowerShell/build.psm1;\$dir='/usr/local/share/powershell/Modules';\$null=New-Item -Type Directory -Path \$dir -ErrorAction SilentlyContinue;Restore-PSPester -Destination \$dir;exit (Invoke-Pester $TESTLIST -PassThru).FailedCount"

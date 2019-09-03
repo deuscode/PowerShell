@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
 
 Describe "Type accelerators" -Tags "CI" {
     BeforeAll {
@@ -69,6 +71,18 @@ Describe "Type accelerators" -Tags "CI" {
                     Type        = [System.Management.Automation.DscResourceAttribute]
                 }
                 @{
+                    Accelerator = 'ExperimentAction'
+                    Type        = [System.Management.Automation.ExperimentAction]
+                }
+                @{
+                    Accelerator = 'Experimental'
+                    Type        = [System.Management.Automation.ExperimentalAttribute]
+                }
+                @{
+                    Accelerator = 'ExperimentalFeature'
+                    Type        = [System.Management.Automation.ExperimentalFeature]
+                }
+                @{
                     Accelerator = 'float'
                     Type        = [System.Single]
                 }
@@ -93,6 +107,10 @@ Describe "Type accelerators" -Tags "CI" {
                     Type        = [System.Int32]
                 }
                 @{
+                    Accelerator = 'short'
+                    Type        = [System.Int16]
+                }
+                @{
                     Accelerator = 'int16'
                     Type        = [System.Int16]
                 }
@@ -115,7 +133,7 @@ Describe "Type accelerators" -Tags "CI" {
                 @{
                     Accelerator = 'cimtype'
                     Type        = [Microsoft.Management.Infrastructure.CimType]
-                }           
+                }
                 @{
                     Accelerator = 'cimconverter'
                     Type        = [Microsoft.Management.Infrastructure.CimConverter]
@@ -195,7 +213,7 @@ Describe "Type accelerators" -Tags "CI" {
                 @{
                     Accelerator = 'SupportsWildcards'
                     Type        = [System.Management.Automation.SupportsWildcardsAttribute]
-                }           
+                }
                 @{
                     Accelerator = 'switch'
                     Type        = [System.Management.Automation.SwitchParameter]
@@ -217,12 +235,24 @@ Describe "Type accelerators" -Tags "CI" {
                     Type        = [System.TimeSpan]
                 }
                 @{
+                    Accelerator = 'ushort'
+                    Type        = [System.UInt16]
+                }
+                @{
                     Accelerator = 'uint16'
                     Type        = [System.UInt16]
                 }
                 @{
+                    Accelerator = 'uint'
+                    Type        = [System.UInt32]
+                }
+                @{
                     Accelerator = 'uint32'
                     Type        = [System.UInt32]
+                }
+                @{
+                    Accelerator = 'ulong'
+                    Type        = [System.Uint64]
                 }
                 @{
                     Accelerator = 'uint64'
@@ -351,7 +381,7 @@ Describe "Type accelerators" -Tags "CI" {
                 @{
                     Accelerator = 'psscriptmethod'
                     Type        = [System.Management.Automation.PSScriptMethod]
-                }  
+                }
                 @{
                     Accelerator = 'psscriptproperty'
                     Type        = [System.Management.Automation.PSScriptProperty]
@@ -368,15 +398,19 @@ Describe "Type accelerators" -Tags "CI" {
                     Accelerator = 'psvariableproperty'
                     Type        = [System.Management.Automation.PSVariableProperty]
                 }
+                @{
+                    Accelerator = 'pspropertyexpression'
+                    Type = [Microsoft.PowerShell.Commands.PSPropertyExpression]
+                }
             )
-        
-            if ( $IsCoreCLR )
+
+            if ( !$IsWindows )
             {
-                $totalAccelerators = 90 
+                $totalAccelerators = 99
             }
             else
             {
-                $totalAccelerators = 94
+                $totalAccelerators = 104
 
                 $extraFullPSAcceleratorTestCases = @(
                     @{
@@ -404,20 +438,20 @@ Describe "Type accelerators" -Tags "CI" {
         }
 
         It 'Should have all the type accelerators' {
-            $TypeAccelerators.Count | Should be $totalAccelerators
+            $TypeAccelerators.Count | Should -Be $totalAccelerators
         }
 
         It 'Should have a type accelerator for: <Accelerator>' -TestCases $TypeAcceleratorTestCases {
             param($Accelerator, $Type)
-            $TypeAcceleratorsType::Get[$Accelerator] | Should be ($Type)
+            $TypeAcceleratorsType::Get[$Accelerator] | Should -Be ($Type)
         }
-    
-        It 'Should have a type accelerator for non-dotnet-core type: <Accelerator>' -Skip:$IsCoreCLR -TestCases $extraFullPSAcceleratorTestCases {
+
+        It 'Should have a type accelerator for non-dotnet-core type: <Accelerator>' -Skip:(!$IsWindows) -TestCases $extraFullPSAcceleratorTestCases {
             param($Accelerator, $Type)
-            $TypeAcceleratorsType::Get[$Accelerator] | Should be ($Type)
+            $TypeAcceleratorsType::Get[$Accelerator] | Should -Be ($Type)
         }
     }
-    
+
     Context 'User Defined Accelerators' {
         BeforeAll {
             $TypeAcceleratorsType::Add('userDefinedAcceleratorType', [int])
@@ -430,13 +464,13 @@ Describe "Type accelerators" -Tags "CI" {
         }
 
         It "Basic type accelerator usage" {
-            [userDefinedAcceleratorType] | Should Be ([int])
+            [userDefinedAcceleratorType] | Should -Be ([int])
         }
 
         It "Can remove type accelerator" {
-            $TypeAcceleratorsType::Get['userDefinedAcceleratorTypeToRemove'] | Should Be ([int])
+            $TypeAcceleratorsType::Get['userDefinedAcceleratorTypeToRemove'] | Should -Be ([int])
             $TypeAcceleratorsType::Remove('userDefinedAcceleratorTypeToRemove')
-            $TypeAcceleratorsType::Get['userDefinedAcceleratorTypeToRemove'] | Should Be $null
+            $TypeAcceleratorsType::Get['userDefinedAcceleratorTypeToRemove'] | Should -BeNullOrEmpty
         }
     }
 }

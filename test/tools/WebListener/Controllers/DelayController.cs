@@ -1,4 +1,6 @@
-﻿using System;
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,6 +21,7 @@ namespace mvc.Controllers
                 int milliseconds = seconds * 1000;
                 Thread.Sleep(milliseconds);
             }
+
             var getController = new GetController();
             getController.ControllerContext = this.ControllerContext;
             return getController.Index();

@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 #if CORECLR
 
@@ -19,7 +18,7 @@ using System.Linq;
 namespace System.Management.Automation
 {
     /// <summary>
-    /// The powershell custom AssemblyLoadContext implementation
+    /// The powershell custom AssemblyLoadContext implementation.
     /// </summary>
     internal partial class PowerShellAssemblyLoadContext
     {
@@ -40,7 +39,7 @@ namespace System.Management.Automation
         #region Constructor
 
         /// <summary>
-        /// Initialize a singleton of PowerShellAssemblyLoadContext
+        /// Initialize a singleton of PowerShellAssemblyLoadContext.
         /// </summary>
         internal static PowerShellAssemblyLoadContext InitializeSingleton(string basePaths)
         {
@@ -55,7 +54,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Constructor
+        /// Constructor.
         /// </summary>
         /// <param name="basePaths">
         /// Base directory paths that are separated by semicolon ';'. They will be the default paths to probe assemblies.
@@ -84,6 +83,7 @@ namespace System.Management.Automation
                         string message = string.Format(CultureInfo.CurrentCulture, BaseFolderDoesNotExist, basePath);
                         throw new ArgumentException(message, "basePaths");
                     }
+
                     _probingPaths[i] = basePath.Trim();
                 }
             }
@@ -101,7 +101,7 @@ namespace System.Management.Automation
 
         #region Fields
 
-        private readonly static object s_syncObj = new object();
+        private static readonly object s_syncObj = new object();
         private readonly string[] _probingPaths;
         private readonly string[] _extensions = new string[] { ".ni.dll", ".dll" };
         // CoreCLR type catalog dictionary
@@ -109,6 +109,9 @@ namespace System.Management.Automation
         //  - Value: strong name of the TPA that contains the type represented by Key.
         private readonly Dictionary<string, string> _coreClrTypeCatalog;
         private readonly Lazy<HashSet<string>> _availableDotNetAssemblyNames;
+        private readonly HashSet<string> _blackListedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase){
+                "System.Windows.Forms"
+            };
 
 #if !UNIX
         private string _winDir;
@@ -118,7 +121,7 @@ namespace System.Management.Automation
 #endif
 
         /// <summary>
-        /// Assembly cache across the AppDomain
+        /// Assembly cache across the AppDomain.
         /// </summary>
         /// <remarks>
         /// We user the assembly short name (AssemblyName.Name) as the key.
@@ -139,7 +142,7 @@ namespace System.Management.Automation
         #region Properties
 
         /// <summary>
-        /// Singleton instance of PowerShellAssemblyLoadContext
+        /// Singleton instance of PowerShellAssemblyLoadContext.
         /// </summary>
         internal static PowerShellAssemblyLoadContext Instance
         {
@@ -147,7 +150,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Get the namespace-qualified type names of all available .NET Core types shipped with PowerShell Core.
+        /// Get the namespace-qualified type names of all available .NET Core types shipped with PowerShell.
         /// This is used for type name auto-completion in PS engine.
         /// </summary>
         internal IEnumerable<string> AvailableDotNetTypeNames
@@ -156,7 +159,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Get the assembly names of all available .NET Core assemblies shipped with PowerShell Core.
+        /// Get the assembly names of all available .NET Core assemblies shipped with PowerShell.
         /// This is used for type name auto-completion in PS engine.
         /// </summary>
         internal HashSet<string> AvailableDotNetAssemblyNames
@@ -169,7 +172,7 @@ namespace System.Management.Automation
         #region Internal_Methods
 
         /// <summary>
-        /// Get the current loaded assemblies
+        /// Get the current loaded assemblies.
         /// </summary>
         internal IEnumerable<Assembly> GetAssembly(string namespaceQualifiedTypeName)
         {
@@ -191,28 +194,12 @@ namespace System.Management.Automation
             return null;
         }
 
-        /// <summary>
-        /// Set the profile optimization root on the appropriate load context
-        /// </summary>
-        internal void SetProfileOptimizationRootImpl(string directoryPath)
-        {
-            AssemblyLoadContext.Default.SetProfileOptimizationRoot(directoryPath);
-        }
-
-        /// <summary>
-        /// Start the profile optimization on the appropriate load context
-        /// </summary>
-        internal void StartProfileOptimizationImpl(string profile)
-        {
-            AssemblyLoadContext.Default.StartProfileOptimization(profile);
-        }
-
         #endregion Internal_Methods
 
         #region Private_Methods
 
         /// <summary>
-        /// The handler for the Resolving event
+        /// The handler for the Resolving event.
         /// </summary>
         private Assembly Resolve(AssemblyLoadContext loadContext, AssemblyName assemblyName)
         {
@@ -266,10 +253,10 @@ namespace System.Management.Automation
                 if (!isAssemblyFileFound || !isAssemblyFileMatching)
                 {
 #if !UNIX
-                    //Try loading from GAC
+                    // Try loading from GAC
                     if (!TryFindInGAC(assemblyName, out asmFilePath))
                     {
-                         return null;
+                        return null;
                     }
 #else
                     return null;
@@ -296,6 +283,13 @@ namespace System.Management.Automation
         private bool TryFindInGAC(AssemblyName assemblyName, out string assemblyFilePath)
         {
             assemblyFilePath = null;
+            if (_blackListedAssemblies.Contains(assemblyName.Name))
+            {
+                // DotNet catches and throws a new exception with no inner exception
+                // We cannot change the message DotNet returns.
+                return false;
+            }
+
             if (Internal.InternalTestHooks.DisableGACLoading)
             {
                 return false;
@@ -304,15 +298,15 @@ namespace System.Management.Automation
             bool assemblyFound = false;
             char dirSeparator = IO.Path.DirectorySeparatorChar;
 
-            if (String.IsNullOrEmpty(_winDir))
+            if (string.IsNullOrEmpty(_winDir))
             {
-                //cache value of '_winDir' folder in member variable.
+                // cache value of '_winDir' folder in member variable.
                 _winDir = Environment.GetEnvironmentVariable("winDir");
             }
 
-            if (String.IsNullOrEmpty(_gacPathMSIL))
+            if (string.IsNullOrEmpty(_gacPathMSIL))
             {
-                //cache value of '_gacPathMSIL' folder in member variable.
+                // cache value of '_gacPathMSIL' folder in member variable.
                 _gacPathMSIL = $"{_winDir}{dirSeparator}Microsoft.NET{dirSeparator}assembly{dirSeparator}GAC_MSIL";
             }
 
@@ -324,9 +318,9 @@ namespace System.Management.Automation
 
                 if (Environment.Is64BitProcess)
                 {
-                    if (String.IsNullOrEmpty(_gacPath64))
+                    if (string.IsNullOrEmpty(_gacPath64))
                     {
-                        //cache value of '_gacPath64' folder in member variable.
+                        // cache value of '_gacPath64' folder in member variable.
                         _gacPath64 = $"{_winDir}{dirSeparator}Microsoft.NET{dirSeparator}assembly{dirSeparator}GAC_64";
                     }
 
@@ -334,9 +328,9 @@ namespace System.Management.Automation
                 }
                 else
                 {
-                    if (String.IsNullOrEmpty(_gacPath32))
+                    if (string.IsNullOrEmpty(_gacPath32))
                     {
-                        //cache value of '_gacPath32' folder in member variable.
+                        // cache value of '_gacPath32' folder in member variable.
                         _gacPath32 = $"{_winDir}{dirSeparator}Microsoft.NET{dirSeparator}assembly{dirSeparator}GAC_32";
                     }
 
@@ -360,15 +354,15 @@ namespace System.Management.Automation
 
             if (Directory.Exists(tempAssemblyDirPath))
             {
-                //Enumerate all directories, sort by name and select the last. This selects the latest version.
+                // Enumerate all directories, sort by name and select the last. This selects the latest version.
                 var chosenVersionDirectory = Directory.GetDirectories(tempAssemblyDirPath).OrderBy(d => d).LastOrDefault();
 
-                if (!String.IsNullOrEmpty(chosenVersionDirectory))
+                if (!string.IsNullOrEmpty(chosenVersionDirectory))
                 {
-                    //Select first or default as the directory will contain only one assembly. If nothing then default is null;
+                    // Select first or default as the directory will contain only one assembly. If nothing then default is null;
                     var foundAssemblyPath = Directory.GetFiles(chosenVersionDirectory, $"{assemblyName.Name}*").FirstOrDefault();
 
-                    if (!String.IsNullOrEmpty(foundAssemblyPath))
+                    if (!string.IsNullOrEmpty(foundAssemblyPath))
                     {
                         AssemblyName asmNameFound = AssemblyLoadContext.GetAssemblyName(foundAssemblyPath);
                         if (IsAssemblyMatching(assemblyName, asmNameFound))
@@ -385,7 +379,7 @@ namespace System.Management.Automation
 #endif
 
         /// <summary>
-        /// Try to get the specified assembly from cache
+        /// Try to get the specified assembly from cache.
         /// </summary>
         private bool TryGetAssemblyFromCache(AssemblyName assemblyName, out Assembly asmLoaded)
         {
@@ -406,10 +400,10 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Check if the loaded assembly matches the request
+        /// Check if the loaded assembly matches the request.
         /// </summary>
-        /// <param name="requestedAssembly">AssemblyName of the requested assembly</param>
-        /// <param name="loadedAssembly">AssemblyName of the loaded assembly</param>
+        /// <param name="requestedAssembly">AssemblyName of the requested assembly.</param>
+        /// <param name="loadedAssembly">AssemblyName of the loaded assembly.</param>
         /// <returns></returns>
         private bool IsAssemblyMatching(AssemblyName requestedAssembly, AssemblyName loadedAssembly)
         {
@@ -472,7 +466,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Throw FileLoadException
+        /// Throw FileLoadException.
         /// </summary>
         private void ThrowFileLoadException(string errorTemplate, params object[] args)
         {
@@ -481,7 +475,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Throw FileNotFoundException
+        /// Throw FileNotFoundException.
         /// </summary>
         private void ThrowFileNotFoundException(string errorTemplate, params object[] args)
         {

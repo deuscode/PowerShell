@@ -1,6 +1,6 @@
 # WebListener App
 
-ASP.NET Core 2.0 app for testing HTTP and HTTPS Requests.
+ASP.NET Core app for testing HTTP and HTTPS Requests.
 
 ## Run with `dotnet`
 
@@ -10,6 +10,10 @@ dotnet publish --output bin --configuration Release
 cd bin
 dotnet WebListener.dll ServerCert.pfx password 8083 8084 8085 8086
 ```
+
+**NOTE**: `ServerCert.pfx` is no longer a static asset
+and you will need to create your own certificate for this purpose.
+The `SelfSignedCertificate` module in the PowerShell Gallery provides this functionality.
 
 The test site can then be accessed via `http://localhost:8083/`, `https://localhost:8084/`, `https://localhost:8085/`, or `https://localhost:8086/`.
 
@@ -27,9 +31,9 @@ The `WebListener.dll` takes 6 arguments:
 ```powershell
 Import-Module .\build.psm1
 Publish-PSTestTools
-$Listener = Start-WebListener -HttpPort 8083 -HttpsPort 8084 -Tls11Port 8085 -TlsPort = 8086
-```
+$Listener = Start-WebListener -HttpPort 8083 -HttpsPort 8084 -Tls11Port 8085 -TlsPort 8086
 
+```
 ## Tests
 
 ### / or /Home/
@@ -231,6 +235,42 @@ Invoke-RestMethod -Uri $uri -Body $body -Method 'Delete'
 }
 ```
 
+### /Dos/
+
+Returns HTML designed to create denial of service against specific RegEx Expressions
+
+#### Image Parsing RegEx
+
+```powershell
+$uri = Get-WebListenerUrl -Test 'Dos' -query @{
+                dosType='img'
+                dosLength='5000'
+            }
+Invoke-RestMethod -Uri $uri -Body $body -Method 'Delete'
+```
+
+Return the following followed by 5,000 spaces.
+
+```html
+<img
+```
+
+#### Charset Parsing RegEx
+
+```powershell
+$uri = Get-WebListenerUrl -Test 'Dos' -query @{
+                dosType='charset'
+                dosLength='5000'
+            }
+Invoke-RestMethod -Uri $uri -Body $body -Method 'Delete'
+```
+
+Return the following followed by 5,000 spaces.
+
+```html
+<meta
+```
+
 ### /Encoding/Utf8/
 
 Returns page containing UTF-8 data.
@@ -262,6 +302,69 @@ Invoke-RestMethod -Uri $uri -Body @{TestField = 'TestValue'}
     "Connection": "Keep-Alive",
     "Host": "localhost:8083"
   }
+}
+```
+
+### /Link/
+
+Returns Link response headers to test paginated results. The endpoint accepts 3 query items:
+
+* `linknumber` - The current link number. This determines the current page. If not supplied or less than 1, this will be set to 1.
+* `maxlinks` - The maximum number of links. This determines the last page. If not supplied or less than 1, this will be set to 3.
+* `type` - The type of link to return. When not supplied or not in the list below, `default` will be used.
+  * `default` - Does not return any special test links and returns `next` link if one is available.
+  * `norel` - Returns a Link header that does not include the `rel=` portion. Suppresses `next` link.
+  * `nourl` - Returns a Link header that does not include the URI portion. Suppresses `next` link.
+  * `malformed` - Returns a malformed Link header. Suppresses `next` link.
+  * `multiple` - Returns multiple Link headers instead of a single Link header and returns `next` link if one is available.
+  * `nowhitespace` - Returns `default` links without any whitespace between the semicolon and `rel`
+  * `extrawhitespace` - Returns `default` links with double whitespace between the semicolon and `rel`
+
+The body will contain the same results as `/Get/` with the addition of the `type`, `linknumber`, and `maxlinks` for the current page.
+
+```powershell
+$Query = @{
+    linknumber = 1
+    maxlinks = 3
+    type = 'default'
+}
+$Uri =  Get-WebListenerUrl -Test 'Link' -Query $Query
+Invoke-RestMethod -Uri $uri -FollowRelLink -MaximumFollowRelLink 1
+```
+
+Headers:
+
+```none
+HTTP/1.1 200 OK
+Date: Sat, 06 Jan 2018 14:27:36 GMT
+Content-Type: application/json; charset=utf-8
+Server: Kestrel
+Transfer-Encoding: chunked
+Link: <http://localhost:8083/Link/?maxlinks=3&linknumber=3>; rel="last",<http://localhost:8083/Link/?maxlinks=3&linknumber=1>; rel="first",<http://localhost:8083/Link/?maxlinks=3&linknumber=1>; rel="self",<http://localhost:8083/Link/?maxlinks=3&linknumber=2>; rel="next"
+```
+
+Body:
+
+```json
+{
+    "type": "default",
+    "url": "http://localhost:8083/Link/?maxlinks=3&linknumber=1&type=default",
+    "maxlinks": 3,
+    "linknumber": 1,
+    "headers": {
+        "User-Agent": "insomnia/5.12.4",
+        "Accept": "*/*",
+        "Content-Length": "0",
+        "Host": "localhost:8083",
+        "Content-Type": "application/json"
+    },
+    "args": {
+        "linknumber": "1",
+        "maxlinks": "3",
+        "type": "default"
+    },
+    "origin": "127.0.0.1",
+    "method": "GET"
 }
 ```
 
@@ -426,7 +529,9 @@ Invoke-RestMethod -Uri $uri -Body $body -Method 'Put'
 
 ### /Redirect/
 
-Will 302 redirect to `/Get/`. If a number is supplied, redirect will occur that many times. Can be used to test maximum redirects.
+Will `302` redirect to `/Get/`. If a number is supplied, redirect will occur that many times. Can be used to test maximum redirects.
+If the `type` query field is supplied the corresponding `System.Net.HttpStatusCode` will be returned instead of `302`.
+If `type` is `relative`, the redirect URI will be relative instead of absolute.
 
 ```powershell
 $uri = Get-WebListenerUrl -Test 'Redirect' -TestValue '2'
@@ -548,5 +653,92 @@ Body:
     "Content-Type": "custom",
     "x-header-02": "value02",
     "x-header-01": "value01"
+}
+```
+
+### /Resume/
+
+This endpoint simulates the download of a 20 byte file with support for resuming with the use of the `Range` HTTP request header.
+The bytes returned are numbered 1 to 20 inclusive.
+If the `Range` header is greater than 20, the endpoint will return a `416 Requested Range Not Satisfiable` response.
+The endpoint also returns an `X-WebListener-Has-Range` response header containing `true` or `false` if the HTTP Request contains a `Range` request header.
+The endpoint will also return an `X-WebListener-Request-Range` response header which contains the `Range` header value if one was present.
+
+```powershell
+$uri = Get-WebListenerUrl -Test 'Resume'
+$response = Invoke-WebRequest -Uri $uri -Headers @{"Range" = "bytes=0-"}
+```
+
+Response Headers:
+
+```none
+HTTP/1.1 206 PartialContent
+Date: Tue, 20 Mar 2018 08:45:42 GMT
+Server: Kestrel
+X-WebListener-Has-Range: true
+X-WebListener-Request-Range: bytes=0-
+Content-Length: 20
+Content-Type: application/octet-stream
+Content-Range: bytes 0-19/20
+```
+
+### /Resume/Bytes/{NumberBytes}
+
+This endpoint emulates a partial download of the same 20 bytes provided by the `/Resume/` endpoint.
+The endpoint will return `{NumberBytes}` bytes of the 20 bytes.
+For example `/Resume/Bytes/5` will return bytes 1 through 5 inclusive of the 20 byte file.
+
+```powershell
+$uri = Get-WebListenerUrl -Test 'Resume' -TestValue 'Bytes/5'
+$response = Invoke-WebRequest -Uri $uri
+```
+
+Response Headers:
+
+```none
+HTTP/1.1 200 OK
+Date: Tue, 20 Mar 2018 08:50:57 GMT
+Server: Kestrel
+Content-Length: 5
+Content-Type: application/octet-stream
+```
+
+### /Resume/NoResume
+
+This endpoint is the same as `/Resume/` with the exception that it ignores the `Range` HTTP request header.
+This endpoint always returns the full 20 bytes and a `200` status.
+The `X-WebListener-Has-Range` and `X-WebListener-Request-Range` headers are also returned the same as the `/Resume/` endpoint.
+
+```powershell
+$uri = Get-WebListenerUrl -Test 'Resume' -TestValue 'NoResume'
+$response = Invoke-WebRequest -Uri $uri
+```
+
+Response Headers:
+
+```none
+HTTP/1.1 200 OK
+Date: Tue, 20 Mar 2018 08:48:21 GMT
+Server: Kestrel
+X-WebListener-Has-Range: false
+Content-Length: 20
+Content-Type: application/octet-stream
+```
+
+### /Retry/{sessionId}/{failureCode}/{failureCount}
+
+This endpoint causes the failure specified by `failureCode` for `failureCount` number of times.
+After that a status 200 is returned with body containing the number of times the failure was caused.
+
+```powershell
+$response = Invoke-WebRequest -Uri 'http://127.0.0.1:8083/Retry?failureCode=599&failureCount=2&sessionid=100&' -MaximumRetryCount 2 -RetryIntervalSec 1
+```
+
+Response Body:
+
+```json
+{
+  "failureResponsesSent":2,
+  "sessionId":100
 }
 ```

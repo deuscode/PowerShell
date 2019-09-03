@@ -1,4 +1,6 @@
-﻿using System;
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,19 +13,19 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
 using mvc.Models;
 
-
 namespace mvc.Controllers
 {
     public class MultipartController : Controller
     {
-        private IHostingEnvironment _environment;
+        private IWebHostEnvironment _environment;
 
-        public MultipartController(IHostingEnvironment environment)
+        public MultipartController(IWebHostEnvironment environment)
         {
             _environment = environment;
         }
+
         public ActionResult Index()
-        {   
+        {
             return View();
         }
 
@@ -48,6 +50,7 @@ namespace mvc.Controllers
                         result = reader.ReadToEnd();
                     }
                 }
+
                 Hashtable fileHash = new Hashtable
                 {
                     {"ContentDisposition" , file.ContentDisposition},
@@ -60,17 +63,20 @@ namespace mvc.Controllers
                 };
                 fileList.Add(fileHash);
             }
+
             Hashtable itemsHash = new Hashtable();
             foreach (var key in collection.Keys)
             {
                 itemsHash.Add(key,collection[key]);
             }
+
             MediaTypeHeaderValue mediaContentType = MediaTypeHeaderValue.Parse(Request.ContentType);
             Hashtable headers = new Hashtable();
             foreach (var key in Request.Headers.Keys)
             {
-                headers.Add(key, String.Join(Constants.HeaderSeparator, Request.Headers[key]));
+                headers.Add(key, string.Join(Constants.HeaderSeparator, Request.Headers[key]));
             }
+
             Hashtable output = new Hashtable
             {
                 {"Files"   , fileList},

@@ -1,7 +1,5 @@
-
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Collections.Generic;
 
@@ -25,8 +23,9 @@ namespace System.Management.Automation.Runspaces
                     .StartEntry()
                         .StartFrame()
                             .AddScriptBlockExpressionBinding(@"
-                      $header = ""           00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F""
-                      if($_.Path) { $header = ""           "" + [Microsoft.PowerShell.Commands.UtilityResources]::FormatHexPathPrefix + $_.Path + ""`r`n`r`n"" + $header }
+                      $header = ""                       00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F""
+                      if($_.Path) { $header = ""                       "" + [Microsoft.PowerShell.Commands.UtilityResources]::FormatHexPathPrefix + $_.Path + ""`r`n`r`n"" + $header }
+
                       $header
                     ")
                         .EndFrame()
@@ -232,6 +231,10 @@ namespace System.Management.Automation.Runspaces
                 "System.Management.Automation.PSModuleInfo",
                 ViewsOf_System_Management_Automation_PSModuleInfo());
 
+            yield return new ExtendedTypeDefinition(
+                "System.Management.Automation.ExperimentalFeature",
+                ViewsOf_System_Management_Automation_ExperimentalFeature());
+
             var td46 = new ExtendedTypeDefinition(
                 "Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject",
                 ViewsOf_Microsoft_PowerShell_Commands_BasicHtmlWebResponseObject());
@@ -248,6 +251,10 @@ namespace System.Management.Automation.Runspaces
             yield return new ExtendedTypeDefinition(
                 "Microsoft.PowerShell.Commands.PSRunspaceDebug",
                 ViewsOf_Microsoft_PowerShell_Commands_PSRunspaceDebug());
+
+            yield return new ExtendedTypeDefinition(
+                "Microsoft.PowerShell.MarkdownRender.PSMarkdownOptionInfo",
+                ViewsOf_Microsoft_PowerShell_MarkdownRender_MarkdownOptionInfo());
         }
 
         private static IEnumerable<FormatViewDefinition> ViewsOf_System_RuntimeType()
@@ -335,9 +342,26 @@ namespace System.Management.Automation.Runspaces
             yield return new FormatViewDefinition("history",
                 TableControl.Create()
                     .AddHeader(Alignment.Right, width: 4)
+                    .AddHeader(Alignment.Right, label: "Duration", width: 12)
                     .AddHeader()
                     .StartRowDefinition()
                         .AddPropertyColumn("Id")
+                        .AddScriptBlockColumn(@"
+                                if ($_.Duration.TotalHours -ge 10) {
+                                    return ""{0}:{1:mm}:{1:ss}.{1:fff}"" -f [int]$_.Duration.TotalHours, $_.Duration
+                                }
+                                elseif ($_.Duration.TotalHours -ge 1) {
+                                    $formatString = ""h\:mm\:ss\.fff""
+                                }
+                                elseif ($_.Duration.TotalMinutes -ge 1) {
+                                    $formatString = ""m\:ss\.fff""
+                                }
+                                else {
+                                    $formatString = ""s\.fff""
+                                }
+
+                                $_.Duration.ToString($formatString)
+                              ")
                         .AddPropertyColumn("CommandLine")
                     .EndRowDefinition()
                 .EndTable());
@@ -732,14 +756,17 @@ namespace System.Management.Automation.Runspaces
                                                     {
                                                         $myinv.MyCommand.Path + "" : ""
                                                     }
+
                                                     break
                                                 }
+
                                                 ([System.Management.Automation.CommandTypes]::Script)
                                                 {
                                                     if ($myinv.MyCommand.ScriptBlock)
                                                     {
                                                         $myinv.MyCommand.ScriptBlock.ToString() + "" : ""
                                                     }
+
                                                     break
                                                 }
                                                 default
@@ -755,6 +782,7 @@ namespace System.Management.Automation.Runspaces
                                                     {
                                                         $myinv.InvocationName + "" : ""
                                                     }
+
                                                     break
                                                 }
                                             }
@@ -790,6 +818,7 @@ namespace System.Management.Automation.Runspaces
                                         $indent = 4
 
                                         $errorCategoryMsg = & { Set-StrictMode -Version 1; $_.ErrorCategory_Message }
+
                                         if ($null -ne $errorCategoryMsg)
                                         {
                                             $indentString = ""+ CategoryInfo          : "" + $_.ErrorCategory_Message
@@ -798,12 +827,14 @@ namespace System.Management.Automation.Runspaces
                                         {
                                             $indentString = ""+ CategoryInfo          : "" + $_.CategoryInfo
                                         }
+
                                         $posmsg += ""`n"" + $indentString
 
                                         $indentString = ""+ FullyQualifiedErrorId : "" + $_.FullyQualifiedErrorId
                                         $posmsg += ""`n"" + $indentString
 
                                         $originInfo = & { Set-StrictMode -Version 1; $_.OriginInfo }
+
                                         if (($null -ne $originInfo) -and ($null -ne $originInfo.PSComputerName))
                                         {
                                             $indentString = ""+ PSComputerName        : "" + $originInfo.PSComputerName
@@ -969,7 +1000,7 @@ namespace System.Management.Automation.Runspaces
                     }
                   ")
                         .AddScriptBlockColumn(@"
-                    if ($_.ConnectionInfo -is [System.Management.Automation.Runspaces.WSManConnectionInfo])
+                    if ($null -ne $_.ConnectionInfo)
                     {
                       ""Remote""
                     }
@@ -999,6 +1030,7 @@ namespace System.Management.Automation.Runspaces
                 TableControl.Create()
                     .AddHeader(Alignment.Right, label: "Id", width: 3)
                     .AddHeader(Alignment.Left, label: "Name", width: 15)
+                    .AddHeader(Alignment.Left, label: "Transport", width: 9)
                     .AddHeader(Alignment.Left, label: "ComputerName", width: 15)
                     .AddHeader(Alignment.Left, label: "ComputerType", width: 15)
                     .AddHeader(Alignment.Left, label: "State", width: 13)
@@ -1007,6 +1039,7 @@ namespace System.Management.Automation.Runspaces
                     .StartRowDefinition()
                         .AddPropertyColumn("Id")
                         .AddPropertyColumn("Name")
+                        .AddPropertyColumn("Transport")
                         .AddPropertyColumn("ComputerName")
                         .AddPropertyColumn("ComputerType")
                         .AddPropertyColumn("State")
@@ -1191,12 +1224,33 @@ namespace System.Management.Automation.Runspaces
                     .GroupByScriptBlock("Split-Path -Parent $_.Path | ForEach-Object { if([Version]::TryParse((Split-Path $_ -Leaf), [ref]$null)) { Split-Path -Parent $_} else {$_} } | Split-Path -Parent", customControl: sharedControls[0])
                     .AddHeader(Alignment.Left, width: 10)
                     .AddHeader(Alignment.Left, width: 10)
+                    .AddHeader(Alignment.Left, label: "PreRelease", width: 10)
                     .AddHeader(Alignment.Left, width: 35)
+                    .AddHeader(Alignment.Left, width: 9, label: "PSEdition")
                     .AddHeader(Alignment.Left, label: "ExportedCommands")
                     .StartRowDefinition()
                         .AddPropertyColumn("ModuleType")
                         .AddPropertyColumn("Version")
+                        .AddScriptBlockColumn(@"
+                            if ($_.PrivateData -and $_.PrivateData.PSData)
+                            {
+                                    $_.PrivateData.PSData.PreRelease
+                            }")
                         .AddPropertyColumn("Name")
+                        .AddScriptBlockColumn(@"
+                            $result = [System.Collections.ArrayList]::new()
+                            $editions = $_.CompatiblePSEditions
+                            if (-not $editions)
+                            {
+                                $editions = @('Desktop')
+                            }
+
+                            foreach ($edition in $editions)
+                            {
+                                $result += $edition.Substring(0,4)
+                            }
+
+                            ($result | Sort-Object) -join ','")
                         .AddScriptBlockColumn("$_.ExportedCommands.Keys")
                     .EndRowDefinition()
                 .EndTable());
@@ -1208,11 +1262,17 @@ namespace System.Management.Automation.Runspaces
                 TableControl.Create()
                     .AddHeader(Alignment.Left, width: 10)
                     .AddHeader(Alignment.Left, width: 10)
+                    .AddHeader(Alignment.Left, label: "PreRelease", width: 10)
                     .AddHeader(Alignment.Left, width: 35)
                     .AddHeader(Alignment.Left, label: "ExportedCommands")
                     .StartRowDefinition()
                         .AddPropertyColumn("ModuleType")
                         .AddPropertyColumn("Version")
+                        .AddScriptBlockColumn(@"
+                            if ($_.PrivateData -and $_.PrivateData.PSData)
+                            {
+                                    $_.PrivateData.PSData.PreRelease
+                            }")
                         .AddPropertyColumn("Name")
                         .AddScriptBlockColumn("$_.ExportedCommands.Keys")
                     .EndRowDefinition()
@@ -1231,11 +1291,45 @@ namespace System.Management.Automation.Runspaces
                         .AddItemProperty(@"Description")
                         .AddItemProperty(@"ModuleType")
                         .AddItemProperty(@"Version")
+                        .AddItemScriptBlock(
+                            @"
+                            if ($_.PrivateData -and $_.PrivateData.PSData)
+                            {
+                                    $_.PrivateData.PSData.PreRelease
+                            }",
+                            label: "PreRelease")
                         .AddItemProperty(@"NestedModules")
                         .AddItemScriptBlock(@"$_.ExportedFunctions.Keys", label: "ExportedFunctions")
                         .AddItemScriptBlock(@"$_.ExportedCmdlets.Keys", label: "ExportedCmdlets")
                         .AddItemScriptBlock(@"$_.ExportedVariables.Keys", label: "ExportedVariables")
                         .AddItemScriptBlock(@"$_.ExportedAliases.Keys", label: "ExportedAliases")
+                    .EndEntry()
+                .EndList());
+        }
+
+        private static IEnumerable<FormatViewDefinition> ViewsOf_System_Management_Automation_ExperimentalFeature()
+        {
+            yield return new FormatViewDefinition("ExperimentalFeature",
+                TableControl.Create()
+                    .AddHeader(Alignment.Left, width: 35)
+                    .AddHeader(Alignment.Right, width: 7)
+                    .AddHeader(Alignment.Left, width: 35)
+                    .AddHeader(Alignment.Left)
+                    .StartRowDefinition()
+                        .AddPropertyColumn("Name")
+                        .AddPropertyColumn("Enabled")
+                        .AddPropertyColumn("Source")
+                        .AddPropertyColumn("Description")
+                    .EndRowDefinition()
+                .EndTable());
+
+            yield return new FormatViewDefinition("ExperimentalFeature",
+                ListControl.Create()
+                    .StartEntry()
+                        .AddItemProperty("Name")
+                        .AddItemProperty("Enabled")
+                        .AddItemProperty("Source")
+                        .AddItemProperty("Description")
                     .EndEntry()
                 .EndList());
         }
@@ -1250,13 +1344,15 @@ namespace System.Management.Automation.Runspaces
                         .AddItemScriptBlock(@"
                                   $result = $_.Content
                                   $result = $result.Substring(0, [Math]::Min($result.Length, 200) )
-                                  if($result.Length -eq 200) { $result += ""..."" }
+                                  if($result.Length -eq 200) { $result += ""`u{2026}"" }
+
                                   $result
                                 ", label: "Content")
                         .AddItemScriptBlock(@"
                                   $result = $_.RawContent
                                   $result = $result.Substring(0, [Math]::Min($result.Length, 200) )
-                                  if($result.Length -eq 200) { $result += ""..."" }
+                                  if($result.Length -eq 200) { $result += ""`u{2026}"" }
+
                                   $result
                                 ", label: "RawContent")
                         .AddItemProperty(@"Headers")
@@ -1280,7 +1376,8 @@ namespace System.Management.Automation.Runspaces
                         .AddItemScriptBlock(@"
                                   $result = $_.RawContent
                                   $result = $result.Substring(0, [Math]::Min($result.Length, 200) )
-                                  if($result.Length -eq 200) { $result += ""..."" }
+                                  if($result.Length -eq 200) { $result += ""`u{2026}"" }
+
                                   $result
                                 ", label: "RawContent")
                         .AddItemProperty(@"Headers")
@@ -1320,6 +1417,26 @@ namespace System.Management.Automation.Runspaces
                         .AddPropertyColumn("BreakAll")
                     .EndRowDefinition()
                 .EndTable());
+        }
+
+        private static IEnumerable<FormatViewDefinition> ViewsOf_Microsoft_PowerShell_MarkdownRender_MarkdownOptionInfo()
+        {
+            yield return new FormatViewDefinition("Microsoft.PowerShell.MarkdownRender.PSMarkdownOptionInfo",
+                ListControl.Create()
+                    .StartEntry()
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header1')", label: "Header1")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header2')", label: "Header2")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header3')", label: "Header3")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header4')", label: "Header4")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header5')", label: "Header5")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Header6')", label: "Header6")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Code')", label: "Code")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Link')", label: "Link")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('Image')", label: "Image")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('EmphasisBold')", label: "EmphasisBold")
+                        .AddItemScriptBlock(@"$_.AsEscapeSequence('EmphasisItalics')", label: "EmphasisItalics")
+                    .EndEntry()
+                .EndList());
         }
     }
 }

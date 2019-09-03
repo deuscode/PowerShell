@@ -1,13 +1,13 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Collections;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Management.Automation.Language;
 using System.Xml;
-using System.Globalization;
+
 using Dbg = System.Management.Automation.Diagnostics;
 
 namespace System.Management.Automation
@@ -16,20 +16,17 @@ namespace System.Management.Automation
     /// This is the interface between the NativeCommandProcessor and the
     /// parameter binders required to bind parameters to a minishell.
     /// </summary>
-    ///
     internal class MinishellParameterBinderController : NativeCommandParameterBinderController
     {
         #region ctor
 
         /// <summary>
         /// Initializes the parameter binder controller for
-        /// the specified native command and engine context
+        /// the specified native command and engine context.
         /// </summary>
-        ///
         /// <param name="command">
         /// The command that the parameters will be bound to.
         /// </param>
-        ///
         internal MinishellParameterBinderController(
             NativeCommand command)
             : base(command)
@@ -43,11 +40,9 @@ namespace System.Management.Automation
         /// <summary>
         /// Override of parent class which should not be used.
         /// </summary>
-        ///
         /// <param name="parameters">
         /// The parameters to bind.
         /// </param>
-        ///
         /// <remarks>
         /// For any parameters that do not have a name, they are added to the command
         /// line arguments for the command
@@ -71,31 +66,26 @@ namespace System.Management.Automation
         internal NativeCommandIOFormat OutputFormat { get; private set; }
 
         /// <summary>
-        /// IF true, child minishell is invoked with no-window
+        /// IF true, child minishell is invoked with no-window.
         /// </summary>
         internal bool NonInteractive { get; private set; }
 
         /// <summary>
-        /// Binds the specified parameters to the native command
+        /// Binds the specified parameters to the native command.
         /// </summary>
-        ///
         /// <param name="parameters">
         /// The parameters to bind.
         /// </param>
-        ///
         /// <param name="outputRedirected">
         /// true if minishell output is redirected.
         /// </param>
-        ///
         /// <param name="hostName">
         /// name of the calling host.
         /// </param>
-        ///
         /// <remarks>
         /// For any parameters that do not have a name, they are added to the command
         /// line arguments for the command
         /// </remarks>
-        ///
         internal Collection<CommandParameterInternal> BindParameters(Collection<CommandParameterInternal> parameters, bool outputRedirected, string hostName)
         {
             MinishellParameters seen = 0;
@@ -197,7 +187,9 @@ namespace System.Management.Automation
                         var argsArg = parameters[i];
                         var encodedArgs = ConvertArgsValueToEncodedString(argsArg.ArgumentValue);
                         parameters[i - 1] = CommandParameterInternal.CreateParameter(EncodedArgsParameter, "-" + EncodedArgsParameter, parameter.ParameterAst);
-                        parameters[i] = CommandParameterInternal.CreateArgument(encodedArgs, argsArg.ArgumentAst);
+                        // NOTE: do not pass the ArgumentAst; it will fail validation in BindParameters if there
+                        // are multiple arguments (array) but encodedArgs is an encoded string.
+                        parameters[i] = CommandParameterInternal.CreateArgument(encodedArgs);
                     }
                 }
                 else
@@ -259,7 +251,7 @@ namespace System.Management.Automation
             Diagnostics.Assert(s_emptyReturnCollection.Count == 0, "This list shouldn't be used for anything as it's shared.");
 
             return s_emptyReturnCollection;
-        } // BindParameters
+        }
 
         private static readonly Collection<CommandParameterInternal> s_emptyReturnCollection = new Collection<CommandParameterInternal>();
 
@@ -304,9 +296,9 @@ namespace System.Management.Automation
         /// <summary>
         /// This function processes the value for -inputFormat and -outputFormat parameter of minishell.
         /// </summary>
-        /// <param name="parameterName">Name of the parameter for error messages. Value should be -inputFormat or -outputFormat</param>
-        /// <param name="value">value to process</param>
-        /// <returns>Processed value</returns>
+        /// <param name="parameterName">Name of the parameter for error messages. Value should be -inputFormat or -outputFormat.</param>
+        /// <param name="value">Value to process.</param>
+        /// <returns>Processed value.</returns>
         private string
         ProcessFormatParameterValue(string parameterName, object value)
         {
@@ -327,6 +319,7 @@ namespace System.Management.Automation
             {
                 return XmlFormatValue;
             }
+
             if (TextFormatValue.StartsWith(fpValue, StringComparison.OrdinalIgnoreCase))
             {
                 return TextFormatValue;
@@ -340,15 +333,15 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Converts value of args parameter in to an encoded string
+        /// Converts value of args parameter in to an encoded string.
         /// </summary>
         private static string ConvertArgsValueToEncodedString(object value)
         {
             ArrayList list = ConvertArgsValueToArrayList(value);
 
-            //Serialize the list
+            // Serialize the list
             StringWriter stringWriter = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
-            //When (if) switching to XmlTextWriter.Create remember the OmitXmlDeclaration difference
+            // When (if) switching to XmlTextWriter.Create remember the OmitXmlDeclaration difference
             XmlWriter xmlWriter = XmlWriter.Create(stringWriter);
             Serializer serializer = new Serializer(xmlWriter);
             serializer.Serialize(list);
@@ -356,13 +349,13 @@ namespace System.Management.Automation
             xmlWriter.Flush();
             string result = stringWriter.ToString();
 
-            //convert result to encoded string
+            // convert result to encoded string
             return StringToBase64Converter.StringToBase64String(result);
         }
 
         /// <summary>
         /// Converts the value of -args parameter received from
-        /// parser in to an arraylist
+        /// parser in to an arraylist.
         /// </summary>
         private static ArrayList ConvertArgsValueToArrayList(object value)
         {
@@ -379,6 +372,7 @@ namespace System.Management.Automation
                     results.Add(list.Current);
                 }
             }
+
             return results;
         }
 

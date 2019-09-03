@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -10,7 +9,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
 {
     internal sealed class WideViewGenerator : ViewGenerator
     {
-        internal override void Initialize(TerminatingErrorContext errorContext, MshExpressionFactory expressionFactory,
+        internal override void Initialize(TerminatingErrorContext errorContext, PSPropertyExpressionFactory expressionFactory,
                                 PSObject so, TypeInfoDataBase db, FormattingCommandLineParameters parameters)
         {
             base.Initialize(errorContext, expressionFactory, so, db, parameters);
@@ -23,7 +22,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
 
             WideViewHeaderInfo wideViewHeaderInfo = new WideViewHeaderInfo();
             startFormat.shapeInfo = wideViewHeaderInfo;
-
 
             if (!this.AutoSize)
             {
@@ -83,7 +81,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             WideViewEntry wve = new WideViewEntry();
             wve.formatPropertyField = GenerateFormatPropertyField(activeWideControlEntryDefinition.formatTokenList, so, enumerationLimit);
 
-            //wve.alignment = activeWideViewEntryDefinition.alignment;
+            // wve.alignment = activeWideViewEntryDefinition.alignment;
 
             return wve;
         }
@@ -100,6 +98,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                     return x;
                 }
             }
+
             if (match.BestMatch != null)
             {
                 return match.BestMatch as WideControlEntryDefinition;
@@ -107,7 +106,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             else
             {
                 Collection<string> typesWithoutPrefix = Deserializer.MaskDeserializationPrefix(typeNames);
-                if (null != typesWithoutPrefix)
+                if (typesWithoutPrefix != null)
                 {
                     match = new TypeMatch(expressionFactory, this.dataBaseInfo.db, typesWithoutPrefix);
                     foreach (WideControlEntryDefinition x in wideBody.optionalEntryList)
@@ -117,6 +116,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                             return x;
                         }
                     }
+
                     if (match.BestMatch != null)
                     {
                         return match.BestMatch as WideControlEntryDefinition;
@@ -172,8 +172,8 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             }
 
             // we did not get any properties:
-            //try to get the display property of the object
-            MshExpression displayNameExpression = PSObjectHelper.GetDisplayNameExpression(so, this.expressionFactory);
+            // try to get the display property of the object
+            PSPropertyExpression displayNameExpression = PSObjectHelper.GetDisplayNameExpression(so, this.expressionFactory);
             if (displayNameExpression != null)
             {
                 this.activeAssociationList = new List<MshResolvedExpressionParameterAssociation>();

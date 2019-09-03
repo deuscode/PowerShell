@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
 function Test-ResourceStrings
 {
     param ( $AssemblyName, $ExcludeList )
@@ -7,7 +9,7 @@ function Test-ResourceStrings
     $repoBase = (Resolve-Path (Join-Path $psScriptRoot ../../../..)).Path
     $asmBase = Join-Path $repoBase "src/$AssemblyName"
     $resourceDir = Join-Path $asmBase resources
-    $resourceFiles = Get-ChildItem $resourceDir -Filter *.resx -ea stop |
+    $resourceFiles = Get-ChildItem $resourceDir -Filter *.resx -ErrorAction stop |
         Where-Object { $excludeList -notcontains $_.Name }
 
     $bindingFlags = [reflection.bindingflags]"NonPublic,Static"
@@ -34,6 +36,16 @@ function Test-ResourceStrings
     # This is the reason why this is not a general module for use. There is
     # no other way to run these tests
     Describe "Resources strings in $AssemblyName (was -ResGen used with Start-PSBuild)" -tag Feature {
+
+        function NormalizeLineEnd
+        {
+            param (
+                [string] $string
+            )
+
+            $string -replace "`r`n", "`n"
+        }
+
         foreach ( $resourceFile in $resourceFiles )
         {
             # in the event that the id has a space in it, it is replaced with a '_'
@@ -43,12 +55,13 @@ function Test-ResourceStrings
                 $resourceType = $ASSEMBLY.GetType($classname, $false, $true)
                 # the properties themselves are static internals, so we need
                 # to using the appropriate bindingflags
-                $resourceType | Should Not BeNullOrEmpty
+                $resourceType | Should -Not -BeNullOrEmpty
 
                 # check all the resource strings
                 $xmlData = [xml](Get-Content $resourceFile.Fullname)
                 foreach ( $inResource in $xmlData.root.data ) {
-                    $resourceType.GetProperty($inResource.name,$bindingFlags).GetValue(0) | should be $inresource.value
+                    $resourceStringToCheck = $resourceType.GetProperty($inResource.name,$bindingFlags).GetValue(0)
+                    NormalizeLineEnd($resourceStringToCheck) | Should -Be (NormalizeLineEnd($inresource.value))
                 }
             }
         }

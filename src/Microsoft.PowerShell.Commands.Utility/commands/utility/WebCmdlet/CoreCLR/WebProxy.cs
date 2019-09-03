@@ -1,6 +1,5 @@
-﻿/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
 using System.Net;
@@ -25,6 +24,7 @@ namespace Microsoft.PowerShell.Commands
         public ICredentials Credentials
         {
             get { return _credentials; }
+
             set { _credentials = value; }
         }
 
@@ -39,6 +39,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 return _credentials == CredentialCache.DefaultCredentials;
             }
+
             set
             {
                 _credentials = value ? CredentialCache.DefaultCredentials : null;
@@ -58,7 +59,6 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return _proxyAddress;
-
         }
 
         public bool IsBypassed(Uri host)

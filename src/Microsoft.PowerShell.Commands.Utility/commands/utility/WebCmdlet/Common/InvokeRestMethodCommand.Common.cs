@@ -1,15 +1,15 @@
-﻿/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
-using System.Management.Automation;
 using System.IO;
-using System.Xml;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Management.Automation;
 using System.Net.Http;
 using System.Text;
+using System.Xml;
+
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Microsoft.PowerShell.Commands
 {
@@ -18,42 +18,45 @@ namespace Microsoft.PowerShell.Commands
         #region Parameters
 
         /// <summary>
-        /// gets or sets the parameter Method
+        /// Gets or sets the parameter Method.
         /// </summary>
         [Parameter(ParameterSetName = "StandardMethod")]
         [Parameter(ParameterSetName = "StandardMethodNoProxy")]
         public override WebRequestMethod Method
         {
             get { return base.Method; }
+
             set { base.Method = value; }
         }
 
         /// <summary>
-        /// gets or sets the parameter CustomMethod
+        /// Gets or sets the parameter CustomMethod.
         /// </summary>
-        [Parameter(Mandatory=true,ParameterSetName = "CustomMethod")]
-        [Parameter(Mandatory=true,ParameterSetName = "CustomMethodNoProxy")]
+        [Parameter(Mandatory = true, ParameterSetName = "CustomMethod")]
+        [Parameter(Mandatory = true, ParameterSetName = "CustomMethodNoProxy")]
         [Alias("CM")]
         [ValidateNotNullOrEmpty]
         public override string CustomMethod
         {
             get { return base.CustomMethod; }
+
             set { base.CustomMethod = value; }
         }
 
         /// <summary>
-        /// enable automatic following of rel links
+        /// Enable automatic following of rel links.
         /// </summary>
         [Parameter]
         [Alias("FL")]
         public SwitchParameter FollowRelLink
         {
             get { return base._followRelLink; }
+
             set { base._followRelLink = value; }
         }
 
         /// <summary>
-        /// gets or sets the maximum number of rel links to follow
+        /// Gets or sets the maximum number of rel links to follow.
         /// </summary>
         [Parameter]
         [Alias("ML")]
@@ -61,6 +64,7 @@ namespace Microsoft.PowerShell.Commands
         public int MaximumFollowRelLink
         {
             get { return base._maximumFollowRelLink; }
+
             set { base._maximumFollowRelLink = value; }
         }
 
@@ -88,8 +92,8 @@ namespace Microsoft.PowerShell.Commands
                 int readCount = 0;
                 while ((readCount < 10) && reader.Read())
                 {
-                    if (String.Equals("rss", reader.Name, StringComparison.OrdinalIgnoreCase) ||
-                        String.Equals("feed", reader.Name, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals("rss", reader.Name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals("feed", reader.Name, StringComparison.OrdinalIgnoreCase))
                     {
                         isRssOrFeed = true;
                         break;
@@ -140,7 +144,7 @@ namespace Microsoft.PowerShell.Commands
             xrs.CheckCharacters = false;
             xrs.CloseInput = false;
 
-            //The XML data needs to be in conformance to the rules for a well-formed XML 1.0 document.
+            // The XML data needs to be in conformance to the rules for a well-formed XML 1.0 document.
             xrs.IgnoreProcessingInstructions = true;
             xrs.MaxCharactersFromEntities = 1024;
             xrs.DtdProcessing = DtdProcessing.Ignore;
@@ -167,7 +171,8 @@ namespace Microsoft.PowerShell.Commands
                 exRef = ex;
                 doc = null;
             }
-            return (null != doc);
+
+            return (doc != null);
         }
 
         private bool TryConvertToJson(string json, out object obj, ref Exception exRef)
@@ -178,9 +183,9 @@ namespace Microsoft.PowerShell.Commands
                 ErrorRecord error;
                 obj = JsonObject.ConvertFromJson(json, out error);
 
-                if (null == obj)
+                if (obj == null)
                 {
-                    // This ensures that a null returned by ConvertFromJson() is the actual JSON null literal. 
+                    // This ensures that a null returned by ConvertFromJson() is the actual JSON null literal.
                     // if not, the ArgumentException will be caught.
                     JToken.Parse(json);
                 }
@@ -211,30 +216,31 @@ namespace Microsoft.PowerShell.Commands
                 exRef = new ArgumentException(msg, ex);
                 obj = null;
             }
+
             return converted;
         }
 
         #endregion
 
         /// <summary>
-        /// enum for rest return type.
+        /// Enum for rest return type.
         /// </summary>
         public enum RestReturnType
         {
             /// <summary>
             /// Return type not defined in response,
-            /// best effort detect
+            /// best effort detect.
             /// </summary>
             Detect,
 
             /// <summary>
-            /// Json return type
+            /// Json return type.
             /// </summary>
             [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Naming", "CA1704:IdentifiersShouldBeSpelledCorrectly")]
             Json,
 
             /// <summary>
-            /// Xml return type
+            /// Xml return type.
             /// </summary>
             Xml,
         }
@@ -277,11 +283,13 @@ namespace Microsoft.PowerShell.Commands
             {
                 get { return _length; }
             }
+
             private long _length;
 
             public override long Position
             {
                 get { return _streamBuffer.Position; }
+
                 set { _streamBuffer.Position = value; }
             }
 
@@ -366,7 +374,7 @@ namespace Microsoft.PowerShell.Commands
         /// <param name="response"></param>
         internal override void ProcessResponse(HttpResponseMessage response)
         {
-            if (null == response) { throw new ArgumentNullException("response"); }
+            if (response == null) { throw new ArgumentNullException("response"); }
 
             using (BufferingStreamReader responseStream = new BufferingStreamReader(StreamHelper.GetResponseStream(response)))
             {
@@ -393,16 +401,31 @@ namespace Microsoft.PowerShell.Commands
                             StreamHelper.TryGetEncoding(charSet, out encoding);
                         }
 
+                        if (string.IsNullOrEmpty(charSet) && returnType == RestReturnType.Json)
+                        {
+                            encoding = Encoding.UTF8;
+                        }
+
                         object obj = null;
                         Exception ex = null;
 
                         string str = StreamHelper.DecodeStream(responseStream, ref encoding);
+
+                        string encodingVerboseName;
+                        try
+                        {
+                            encodingVerboseName = string.IsNullOrEmpty(encoding.HeaderName) ? encoding.EncodingName : encoding.HeaderName;
+                        }
+                        catch (NotSupportedException)
+                        {
+                            encodingVerboseName = encoding.EncodingName;
+                        }
                         // NOTE: Tests use this verbose output to verify the encoding.
                         WriteVerbose(string.Format
                         (
                             System.Globalization.CultureInfo.InvariantCulture,
                             "Content encoding: {0}",
-                            string.IsNullOrEmpty(encoding.HeaderName) ? encoding.EncodingName : encoding.HeaderName)
+                            encodingVerboseName)
                         );
                         bool convertSuccess = false;
 
@@ -431,7 +454,7 @@ namespace Microsoft.PowerShell.Commands
                     StreamHelper.SaveStreamToFile(responseStream, QualifiedOutFile, this);
                 }
 
-                if (!String.IsNullOrEmpty(ResponseHeadersVariable))
+                if (!string.IsNullOrEmpty(ResponseHeadersVariable))
                 {
                     PSVariableIntrinsics vi = SessionState.PSVariable;
                     vi.Set(ResponseHeadersVariable, WebResponseHelper.GetHeadersDictionary(response));
@@ -445,7 +468,7 @@ namespace Microsoft.PowerShell.Commands
 
         private RestReturnType CheckReturnType(HttpResponseMessage response)
         {
-            if (null == response) { throw new ArgumentNullException("response"); }
+            if (response == null) { throw new ArgumentNullException("response"); }
 
             RestReturnType rt = RestReturnType.Detect;
             string contentType = ContentHelper.GetContentType(response);

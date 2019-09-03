@@ -1,21 +1,19 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
+using System.Globalization;
 using System.Management.Automation;
 using System.Runtime.InteropServices;
-using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Microsoft.PowerShell.Commands
 {
     /// <summary>
-    /// Construct the Useragent string
+    /// Construct the Useragent string.
     /// </summary>
     public static class PSUserAgent
     {
-
         private static string s_windowsUserAgent;
 
         internal static string UserAgent
@@ -31,7 +29,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Useragent string for InternetExplorer (9.0)
+        /// Useragent string for InternetExplorer (9.0).
         /// </summary>
         public static string InternetExplorer
         {
@@ -46,7 +44,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Useragent string for Firefox (4.0)
+        /// Useragent string for Firefox (4.0).
         /// </summary>
         public static string FireFox
         {
@@ -61,7 +59,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Useragent string for Chrome (7.0)
+        /// Useragent string for Chrome (7.0).
         /// </summary>
         public static string Chrome
         {
@@ -76,7 +74,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Useragent string for Opera (9.0)
+        /// Useragent string for Opera (9.0).
         /// </summary>
         public static string Opera
         {
@@ -91,7 +89,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Useragent string for Safari (5.0)
+        /// Useragent string for Safari (5.0).
         /// </summary>
         public static string Safari
         {
@@ -130,7 +128,8 @@ namespace Microsoft.PowerShell.Commands
                 if (Platform.IsWindows)
                 {
                     // only generate the windows user agent once
-                    if(s_windowsUserAgent == null){
+                    if (s_windowsUserAgent == null)
+                    {
                         // find the version in the windows operating system description
                         Regex pattern = new Regex(@"\d+(\.\d+)+");
                         string versionText = pattern.Match(OS).Value;
@@ -152,7 +151,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     // unknown/unsupported platform
                     Diagnostics.Assert(false, "Unable to determine Operating System Platform");
-                    return String.Empty;
+                    return string.Empty;
                 }
             }
         }

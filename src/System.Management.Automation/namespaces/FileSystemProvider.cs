@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
 using System.Collections;
@@ -14,15 +13,17 @@ using System.Linq;
 using System.Management.Automation;
 using System.Management.Automation.Internal;
 using System.Management.Automation.Provider;
+using System.Management.Automation.Runspaces;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.AccessControl;
 using System.Text;
 using System.Xml;
 using System.Xml.XPath;
+
 using Microsoft.Win32.SafeHandles;
+
 using Dbg = System.Management.Automation;
-using System.Runtime.InteropServices;
-using System.Management.Automation.Runspaces;
 
 namespace Microsoft.PowerShell.Commands
 {
@@ -34,15 +35,15 @@ namespace Microsoft.PowerShell.Commands
     /// </summary>
     [CmdletProvider(FileSystemProvider.ProviderName, ProviderCapabilities.Credentials | ProviderCapabilities.Filter | ProviderCapabilities.ShouldProcess)]
     [OutputType(typeof(FileSecurity), ProviderCmdlet = ProviderCmdlet.SetAcl)]
-    [OutputType(typeof(String), typeof(PathInfo), ProviderCmdlet = ProviderCmdlet.ResolvePath)]
+    [OutputType(typeof(string), typeof(PathInfo), ProviderCmdlet = ProviderCmdlet.ResolvePath)]
     [OutputType(typeof(PathInfo), ProviderCmdlet = ProviderCmdlet.PushLocation)]
-    [OutputType(typeof(Byte), typeof(String), ProviderCmdlet = ProviderCmdlet.GetContent)]
+    [OutputType(typeof(Byte), typeof(string), ProviderCmdlet = ProviderCmdlet.GetContent)]
     [OutputType(typeof(FileInfo), ProviderCmdlet = ProviderCmdlet.GetItem)]
     [OutputType(typeof(FileInfo), typeof(DirectoryInfo), ProviderCmdlet = ProviderCmdlet.GetChildItem)]
     [OutputType(typeof(FileSecurity), typeof(DirectorySecurity), ProviderCmdlet = ProviderCmdlet.GetAcl)]
-    [OutputType(typeof(Boolean), typeof(String), typeof(FileInfo), typeof(DirectoryInfo), ProviderCmdlet = ProviderCmdlet.GetItem)]
-    [OutputType(typeof(Boolean), typeof(String), typeof(DateTime), typeof(System.IO.FileInfo), typeof(System.IO.DirectoryInfo), ProviderCmdlet = ProviderCmdlet.GetItemProperty)]
-    [OutputType(typeof(String), typeof(System.IO.FileInfo), ProviderCmdlet = ProviderCmdlet.NewItem)]
+    [OutputType(typeof(bool), typeof(string), typeof(FileInfo), typeof(DirectoryInfo), ProviderCmdlet = ProviderCmdlet.GetItem)]
+    [OutputType(typeof(bool), typeof(string), typeof(DateTime), typeof(System.IO.FileInfo), typeof(System.IO.DirectoryInfo), ProviderCmdlet = ProviderCmdlet.GetItemProperty)]
+    [OutputType(typeof(string), typeof(System.IO.FileInfo), ProviderCmdlet = ProviderCmdlet.NewItem)]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Maintainability", "CA1506:AvoidExcessiveClassCoupling", Justification = "This coupling is required")]
     public sealed partial class FileSystemProvider : NavigationCmdletProvider,
                                                      IContentCmdletProvider,
@@ -60,7 +61,6 @@ namespace Microsoft.PowerShell.Commands
         // to copy an item onto itself.
         private const string SelfCopyDataKey = "SelfCopy";
 
-
         /// <summary>
         /// An instance of the PSTraceSource class used for trace output
         /// using "FileSystemProvider" as the category.
@@ -70,7 +70,7 @@ namespace Microsoft.PowerShell.Commands
             Dbg.PSTraceSource.GetTracer("FileSystemProvider", "The namespace navigation provider for the file system");
 
         /// <summary>
-        /// Gets the name of the provider
+        /// Gets the name of the provider.
         /// </summary>
         public const string ProviderName = "FileSystem";
 
@@ -83,57 +83,143 @@ namespace Microsoft.PowerShell.Commands
         }
 
         private Collection<WildcardPattern> _excludeMatcher = null;
+        private static System.IO.EnumerationOptions _enumerationOptions = new System.IO.EnumerationOptions
+        {
+            MatchType = MatchType.Win32,
+            MatchCasing = MatchCasing.CaseInsensitive,
+            AttributesToSkip = 0 // Default is to skip Hidden and System files, so we clear this to retain existing behavior
+        };
 
         /// <summary>
         /// Converts all / in the path to \
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to normalize.
         /// </param>
-        ///
         /// <returns>
         /// The path with all / normalized to \
         /// </returns>
-        ///
         private static string NormalizePath(string path)
         {
-            return path.Replace(StringLiterals.AlternatePathSeparator, StringLiterals.DefaultPathSeparator);
-        } // NormalizePath
-
+            return GetCorrectCasedPath(path.Replace(StringLiterals.AlternatePathSeparator, StringLiterals.DefaultPathSeparator));
+        }
 
         /// <summary>
-        ///  Checks if the item exist at the specified path. if it exists then creates
+        /// Get the correct casing for a path.  This method assumes it's being called by NormalizePath()
+        /// so that the path is already normalized.
+        /// </summary>
+        /// <param name="path">
+        /// The path to retrieve.
+        /// </param>
+        /// <returns>
+        /// The path with accurate casing if item exists, otherwise it returns path that was passed in.
+        /// </returns>
+        private static string GetCorrectCasedPath(string path)
+        {
+            // Only apply to directories where there are issues with some tools if the casing
+            // doesn't match the source like git
+            if (Directory.Exists(path))
+            {
+                string exactPath = string.Empty;
+                int itemsToSkip = 0;
+                if (Utils.PathIsUnc(path))
+                {
+                    // With the Split method, a UNC path like \\server\share, we need to skip
+                    // trying to enumerate the server and share, so skip the first two empty
+                    // strings, then server, and finally share name.
+                    itemsToSkip = 4;
+                }
+
+                foreach (string item in path.Split(StringLiterals.DefaultPathSeparator))
+                {
+                    if (itemsToSkip-- > 0)
+                    {
+                        // This handles the UNC server and share and 8.3 short path syntax
+                        exactPath += item + StringLiterals.DefaultPathSeparator;
+                        continue;
+                    }
+                    else if (string.IsNullOrEmpty(exactPath))
+                    {
+                        // This handles the drive letter or / root path start
+                        exactPath = item + StringLiterals.DefaultPathSeparator;
+                    }
+                    else if (string.IsNullOrEmpty(item))
+                    {
+                        // This handles the trailing slash case
+                        continue;
+                    }
+                    else if (item.Contains('~'))
+                    {
+                        // This handles short path names
+                        exactPath += StringLiterals.DefaultPathSeparator + item;
+                    }
+                    else
+                    {
+                        exactPath = Directory.GetFileSystemEntries(exactPath, item).First();
+                    }
+                }
+
+                if (path.EndsWith(StringLiterals.DefaultPathSeparator))
+                {
+                    return exactPath + StringLiterals.DefaultPathSeparator;
+                }
+
+                return exactPath;
+            }
+            else
+            {
+                return path;
+            }
+        }
+
+        /// <summary>
+        /// Checks if the item exist at the specified path. if it exists then creates
         /// appropriate directoryinfo or fileinfo object.
         /// </summary>
         /// <param name="path">
-        /// refers to the item for which we are checking for existence and creating filesysteminfo object.
+        /// Refers to the item for which we are checking for existence and creating filesysteminfo object.
         /// </param>
         /// <param name="isContainer">
-        /// return true if path points to a directory else returns false.
+        /// Return true if path points to a directory else returns false.
         /// </param>
-        /// <returns></returns>
-        private static FileSystemInfo GetFileSystemInfo(string path, ref bool isContainer)
+        /// <returns>FileInfo or DirectoryInfo object.</returns>
+        /// <exception cref="System.ArgumentNullException">
+        /// The path is null.
+        /// </exception>
+        /// <exception cref="System.IO.IOException">
+        /// I/O error occurs.
+        /// </exception>
+        /// <exception cref="System.UnauthorizedAccessException">
+        /// An I/O error or a specific type of security error.
+        /// </exception>
+        private static FileSystemInfo GetFileSystemInfo(string path, out bool isContainer)
         {
-            isContainer = false;
+            // We use 'FileInfo.Attributes' (not 'FileInfo.Exist')
+            // because we want to get exceptions
+            // like UnauthorizedAccessException or IOException.
+            FileSystemInfo fsinfo = new FileInfo(path);
+            var attr = fsinfo.Attributes;
+            var exists = (int)attr != -1;
+            isContainer = exists && attr.HasFlag(FileAttributes.Directory);
 
-            if (Utils.NativeFileExists(path))
+            if (exists)
             {
-                return new FileInfo(path);
-            }
-
-            if (Utils.NativeDirectoryExists(path))
-            {
-                isContainer = true;
-                return new DirectoryInfo(path);
+                if (isContainer)
+                {
+                    return new DirectoryInfo(path);
+                }
+                else
+                {
+                    return fsinfo;
+                }
             }
 
             return null;
         }
 
         /// <summary>
-        /// overrides the method of CmdletProvider, considering the additional
-        /// dynamic parameters of FileSystemProvider
+        /// Overrides the method of CmdletProvider, considering the additional
+        /// dynamic parameters of FileSystemProvider.
         /// </summary>
         /// <returns>
         /// whether the filter or attribute filter is set.
@@ -145,7 +231,7 @@ namespace Microsoft.PowerShell.Commands
             if (fspDynamicParam != null)
             {
                 attributeFilterSet = (
-                    (null != fspDynamicParam.Attributes)
+                    (fspDynamicParam.Attributes != null)
                         || (fspDynamicParam.Directory)
                         || (fspDynamicParam.File)
                         || (fspDynamicParam.Hidden)
@@ -163,12 +249,10 @@ namespace Microsoft.PowerShell.Commands
         /// "Attributes" that returns an enum evaluator for the
         /// given expression.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <returns>
         /// An object that has properties and fields decorated with
         /// parsing attributes similar to a cmdlet class.
@@ -185,16 +269,13 @@ namespace Microsoft.PowerShell.Commands
         /// "Attributes" that returns an enum evaluator for the
         /// given expression.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <param name="recurse">
         /// Ignored.
         /// </param>
-        ///
         /// <returns>
         /// An object that has properties and fields decorated with
         /// parsing attributes similar to a cmdlet class.
@@ -220,7 +301,7 @@ namespace Microsoft.PowerShell.Commands
 
         /// <summary>
         /// Implementation of ICmdletProviderSupportsHelp interface.
-        /// Gets provider-specific help content for the corresponding cmdlet
+        /// Gets provider-specific help content for the corresponding cmdlet.
         /// </summary>
         /// <param name="helpItemName">
         /// Name of command that the help is requested for.
@@ -233,7 +314,6 @@ namespace Microsoft.PowerShell.Commands
         /// </returns>
         public string GetHelpMaml(string helpItemName, string path)
         {
-            //
             // Get the verb and noun from helpItemName
             //
             string verb = null;
@@ -242,27 +322,27 @@ namespace Microsoft.PowerShell.Commands
 
             try
             {
-                if (!String.IsNullOrEmpty(helpItemName))
+                if (!string.IsNullOrEmpty(helpItemName))
                 {
                     CmdletInfo.SplitCmdletName(helpItemName, out verb, out noun);
                 }
                 else
                 {
-                    return String.Empty;
+                    return string.Empty;
                 }
 
-                if (String.IsNullOrEmpty(verb) || String.IsNullOrEmpty(noun))
+                if (string.IsNullOrEmpty(verb) || string.IsNullOrEmpty(noun))
                 {
-                    return String.Empty;
+                    return string.Empty;
                 }
 
                 // Load the help file from the current UI culture subfolder
                 XmlDocument document = new XmlDocument();
                 CultureInfo currentUICulture = CultureInfo.CurrentUICulture;
                 string fullHelpPath = Path.Combine(
-                    string.IsNullOrEmpty(this.ProviderInfo.ApplicationBase) ? "" : this.ProviderInfo.ApplicationBase,
+                    string.IsNullOrEmpty(this.ProviderInfo.ApplicationBase) ? string.Empty : this.ProviderInfo.ApplicationBase,
                     currentUICulture.ToString(),
-                    string.IsNullOrEmpty(this.ProviderInfo.HelpFile) ? "" : this.ProviderInfo.HelpFile);
+                    string.IsNullOrEmpty(this.ProviderInfo.HelpFile) ? string.Empty : this.ProviderInfo.HelpFile);
 
                 XmlReaderSettings settings = new XmlReaderSettings();
                 settings.XmlResolver = null;
@@ -275,7 +355,7 @@ namespace Microsoft.PowerShell.Commands
                 nsMgr.AddNamespace("command", HelpCommentsParser.commandURI);
 
                 // Compose XPath query to select the appropriate node based on the cmdlet
-                string xpathQuery = String.Format(
+                string xpathQuery = string.Format(
                     CultureInfo.InvariantCulture,
                     HelpCommentsParser.ProviderHelpCommandXPath,
                     "[@id='FileSystem']",
@@ -291,49 +371,49 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (XmlException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (PathTooLongException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (IOException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (UnauthorizedAccessException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (NotSupportedException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (SecurityException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             catch (XPathException)
             {
-                return String.Empty;
+                return string.Empty;
             }
             finally
             {
-                if (null != reader)
+                if (reader != null)
                 {
                     ((IDisposable)reader).Dispose();
                 }
             }
-            return String.Empty;
+
+            return string.Empty;
         }
 
         #endregion
 
         #region CmdletProvider members
 
-
         /// <summary>
-        /// Starts the File System provider.  This method sets the Home for the
+        /// Starts the File System provider. This method sets the Home for the
         /// provider to providerInfo.Home if specified, and %USERPROFILE%
         /// otherwise.
         /// </summary>
@@ -359,11 +439,30 @@ namespace Microsoft.PowerShell.Commands
                         providerInfo.Home = homeDirectory;
                     }
                     else
+                    {
                         s_tracer.WriteLine("Not setting home directory {0} - does not exist", homeDirectory);
+                    }
                 }
             }
+
+            // OneDrive placeholder support (issue #8315)
+            // make it so OneDrive placeholders are perceived as such with *all* their attributes accessible
+#if !UNIX
+            // The placeholder mode management APIs Rtl(Set|Query)(Process|Thread)PlaceholderCompatibilityMode
+            // are only supported starting with Windows 10 version 1803 (build 17134)
+            Version minBuildForPlaceHolderAPIs = new Version(10, 0, 17134, 0);
+            if (Environment.OSVersion.Version >= minBuildForPlaceHolderAPIs)
+            {
+                // let's be safe, don't change the PlaceHolderCompatibilityMode if the current one is not what we expect
+                if (NativeMethods.PHCM_DISGUISE_PLACEHOLDER == NativeMethods.RtlQueryProcessPlaceholderCompatibilityMode())
+                {
+                    NativeMethods.RtlSetProcessPlaceholderCompatibilityMode(NativeMethods.PHCM_EXPOSE_PLACEHOLDERS);
+                }
+            }
+#endif
+
             return providerInfo;
-        } // Start
+        }
 
         #endregion CmdletProvider members
 
@@ -372,11 +471,9 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Determines if the specified drive can be mounted.
         /// </summary>
-        ///
         /// <param name="drive">
         /// The drive that is going to be mounted.
         /// </param>
-        ///
         /// <returns>
         /// The same drive that was passed in, if the drive can be mounted.
         /// null if the drive cannot be mounted.
@@ -390,13 +487,12 @@ namespace Microsoft.PowerShell.Commands
         protected override PSDriveInfo NewDrive(PSDriveInfo drive)
         {
             // verify parameters
-
             if (drive == null)
             {
                 throw PSTraceSource.NewArgumentNullException("drive");
             }
 
-            if (String.IsNullOrEmpty(drive.Root))
+            if (string.IsNullOrEmpty(drive.Root))
             {
                 throw PSTraceSource.NewArgumentException("drive.Root");
             }
@@ -419,7 +515,6 @@ namespace Microsoft.PowerShell.Commands
             // drive is not a fixed drive.  We want to allow
             // a drive to exist for floppies and other such\
             // removable media, even if the media isn't in place.
-
             bool driveIsFixed = true;
             PSDriveInfo result = null;
 
@@ -449,18 +544,7 @@ namespace Microsoft.PowerShell.Commands
             if (driveIsFixed)
             {
                 // Since the drive is fixed, ensure the root is valid.
-                try
-                {
-                    validDrive = Utils.NativeDirectoryExists(drive.Root);
-                }
-                catch (IOException)
-                {
-                    // Ignore, the network path may not be found.
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    // Ignore, we may be running in an AppContainer
-                }
+                validDrive = Directory.Exists(drive.Root);
             }
 
             if (validDrive)
@@ -469,7 +553,7 @@ namespace Microsoft.PowerShell.Commands
             }
             else
             {
-                String error = StringUtil.Format(FileSystemProviderStrings.DriveRootError, drive.Root);
+                string error = StringUtil.Format(FileSystemProviderStrings.DriveRootError, drive.Root);
                 Exception e = new IOException(error);
                 WriteError(new ErrorRecord(e, "DriveRootError", ErrorCategory.ReadError, drive));
             }
@@ -477,7 +561,7 @@ namespace Microsoft.PowerShell.Commands
             drive.Trace();
 
             return result;
-        } // NewDrive
+        }
 
         /// <summary>
         /// MapNetworkDrive facilitates to map the newly created PS Drive to a network share.
@@ -524,7 +608,7 @@ namespace Microsoft.PowerShell.Commands
                     }
                     else
                     {
-                        //error.
+                        // error.
                         ErrorRecord er = new ErrorRecord(new InvalidOperationException(FileSystemProviderStrings.InvalidDriveName), "DriveNameNotSupportedForPersistence", ErrorCategory.InvalidOperation, drive);
                         ThrowTerminatingError(er);
                     }
@@ -631,7 +715,6 @@ namespace Microsoft.PowerShell.Commands
                     driveName = drive.Root;
                 }
 
-
                 // You need to actually remove the drive.
                 int code = NativeMethods.WNetCancelConnection2(driveName, flags, true);
 
@@ -660,7 +743,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 char driveChar = Convert.ToChar(drive.Name, CultureInfo.InvariantCulture);
 
-                if (Char.ToUpperInvariant(driveChar) >= 'A' && Char.ToUpperInvariant(driveChar) <= 'Z')
+                if (char.ToUpperInvariant(driveChar) >= 'A' && char.ToUpperInvariant(driveChar) <= 'Z')
                 {
                     isSupportedDriveForPersistence = true;
                 }
@@ -671,7 +754,7 @@ namespace Microsoft.PowerShell.Commands
 
         /// <summary>
         /// Return the UNC path for a given network drive
-        /// using the Windows API
+        /// using the Windows API.
         /// </summary>
         /// <param name="driveName"></param>
         /// <returns></returns>
@@ -711,6 +794,7 @@ namespace Microsoft.PowerShell.Commands
                     uncBuffer = new StringBuilder(bufferSize);
                     errorCode = NativeMethods.WNetGetConnection(driveName, uncBuffer, ref bufferSize);
                 }
+
                 if (errorCode != 0)
                 {
                     throw new System.ComponentModel.Win32Exception(errorCode);
@@ -771,7 +855,7 @@ namespace Microsoft.PowerShell.Commands
                                 associatedPath = associatedPath.Remove(0, 3);
                                 associatedPath = "\\" + associatedPath;
                             }
-                            else if (associatedPath.EndsWith(":", StringComparison.OrdinalIgnoreCase))
+                            else if (associatedPath.EndsWith(':'))
                             {
                                 // The substed path is the root path of a drive. For example: subst Y: C:\
                                 associatedPath += Path.DirectorySeparatorChar;
@@ -801,7 +885,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // "The Windows API has many functions that also have Unicode versions to permit
                         // an extended-length path for a maximum total path length of 32,767 characters"
-                        // See http://msdn.microsoft.com/en-us/library/aa365247.aspx#maxpath
+                        // See https://msdn.microsoft.com/library/aa365247.aspx#maxpath
                         string errorMsg = StringUtil.Format(FileSystemProviderStrings.SubstitutePathTooLong, driveName);
                         throw new InvalidOperationException(errorMsg);
                     }
@@ -856,12 +940,10 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Returns a collection of all logical drives in the system.
         /// </summary>
-        ///
         /// <returns>
         /// A collection of PSDriveInfo objects, one for each logical drive returned from
         /// System.Environment.GetLogicalDrives().
         /// </returns>
-        ///
         protected override Collection<PSDriveInfo> InitializeDefaultDrives()
         {
             Collection<PSDriveInfo> results = new Collection<PSDriveInfo>();
@@ -884,7 +966,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         string newDriveName = newDrive.Name.Substring(0, 1);
 
-                        string description = String.Empty;
+                        string description = string.Empty;
                         string root = newDrive.Name;
                         string displayRoot = null;
 
@@ -955,8 +1037,11 @@ namespace Microsoft.PowerShell.Commands
                                 break;
                             }
                         }
+
                         if (skipDuplicate)
+                        {
                             continue;
+                        }
 
                         // Create a new VirtualDrive for each logical drive
                         PSDriveInfo newPSDriveInfo =
@@ -1000,20 +1085,30 @@ namespace Microsoft.PowerShell.Commands
                     catch (System.UnauthorizedAccessException)
                     {
                     }
-                } // foreach
+                }
             }
-            return results;
-        } // InitializeDefaultDrives
 
+            results.Add(
+                new PSDriveInfo(
+                    DriveNames.TempDrive,
+                    ProviderInfo,
+                    Path.GetTempPath(),
+                    SessionStateStrings.TempDriveDescription,
+                    credential: null,
+                    displayRoot: null)
+            );
+
+            return results;
+        }
 
         #endregion DriveCmdletProvider methods
 
         #region ItemCmdletProvider methods
 
         /// <summary>
-        /// Retrieves the dynamic parameters required for the Get-Item cmdlet
+        /// Retrieves the dynamic parameters required for the Get-Item cmdlet.
         /// </summary>
-        /// <param name="path">The path of the file to process</param>
+        /// <param name="path">The path of the file to process.</param>
         /// <returns>An instance of the FileSystemProviderGetItemDynamicParameters class that represents the dynamic parameters.</returns>
         protected override object GetItemDynamicParameters(string path)
         {
@@ -1023,26 +1118,23 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Determines if the specified path is syntactically and semantically valid.
         /// An example path looks like this
-        ///     C:\WINNT\Media\chimes.wav
+        ///     C:\WINNT\Media\chimes.wav.
         /// </summary>
-        ///
         /// <param name="path">
         /// The fully qualified path to validate.
         /// </param>
-        ///
         /// <returns>
         /// True if the path is valid, false otherwise.
         /// </returns>
         protected override bool IsValidPath(string path)
         {
-            //Path passed should be fully qualified path.
-            if (String.IsNullOrEmpty(path))
+            // Path passed should be fully qualified path.
+            if (string.IsNullOrEmpty(path))
             {
                 return false;
             }
 
-
-            //Normalize the path
+            // Normalize the path
             path = NormalizePath(path);
             path = EnsureDriveIsRooted(path);
 
@@ -1057,8 +1149,8 @@ namespace Microsoft.PowerShell.Commands
             }
 #endif
 
-            //Make sure the path is either drive rooted or UNC Path
-            if (!IsAbsolutePath(path) && !IsUNCPath(path))
+            // Make sure the path is either drive rooted or UNC Path
+            if (!IsAbsolutePath(path) && !Utils.PathIsUnc(path))
             {
                 return false;
             }
@@ -1082,7 +1174,9 @@ namespace Microsoft.PowerShell.Commands
                     return false;
                 }
                 else
+                {
                     throw;
+                }
             }
 
             return true;
@@ -1091,27 +1185,23 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Gets the item at the specified path.
         /// </summary>
-        ///
         /// <param name="path">
         /// A fully qualified path representing a file or directory in the
         /// file system.
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  FileInfo and DirectoryInfo objects are written to the
         /// context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         protected override void GetItem(string path)
         {
             // Validate the argument
-
             bool isContainer = false;
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 // The parameter was null, throw an exception
                 throw PSTraceSource.NewArgumentException("path");
@@ -1199,7 +1289,7 @@ namespace Microsoft.PowerShell.Commands
                 }
                 else
                 {
-                    String error = StringUtil.Format(FileSystemProviderStrings.ItemNotFound, path);
+                    string error = StringUtil.Format(FileSystemProviderStrings.ItemNotFound, path);
                     Exception e = new IOException(error);
                     WriteError(new ErrorRecord(
                         e,
@@ -1210,7 +1300,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioError)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 ErrorRecord er = new ErrorRecord(ioError, "GetItemIOError", ErrorCategory.ReadError, path);
                 WriteError(er);
             }
@@ -1218,21 +1308,19 @@ namespace Microsoft.PowerShell.Commands
             {
                 WriteError(new ErrorRecord(accessException, "GetItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
             }
-        } // GetItem
+        }
 
         private FileSystemInfo GetFileSystemItem(string path, ref bool isContainer, bool showHidden)
         {
             path = NormalizePath(path);
+            FileInfo result = new FileInfo(path);
 
-            FileSystemInfo result = null;
+            // FileInfo.Exists is always false for a directory path, so we check the attribute for existence.
+            var attributes = result.Attributes;
+            if ((int)attributes == -1) { /* Path doesn't exist. */ return null; }
 
-            // First see if the path is to a file by
-            // constructing a FileInfo object
-
-            int attribs = SafeGetFileAttributes(path);
-            bool exists = (attribs != -1);
-            bool directory = (attribs & ((int)NativeMethods.FileAttributes.Directory)) == ((int)NativeMethods.FileAttributes.Directory);
-            bool hidden = (attribs & ((int)NativeMethods.FileAttributes.Hidden)) == ((int)NativeMethods.FileAttributes.Hidden);
+            bool hidden = attributes.HasFlag(FileAttributes.Hidden);
+            isContainer = attributes.HasFlag(FileAttributes.Directory);
 
             FlagsExpression<FileAttributes> evaluator = null;
             FlagsExpression<FileAttributes> switchEvaluator = null;
@@ -1246,74 +1334,61 @@ namespace Microsoft.PowerShell.Commands
             bool filterHidden = false;           // "Hidden" is specified somewhere in the expression
             bool switchFilterHidden = false;     // "Hidden" is specified somewhere in the parameters
 
-            if (null != evaluator)
+            if (evaluator != null)
             {
                 filterHidden = evaluator.ExistsInExpression(FileAttributes.Hidden);
             }
-            if (null != switchEvaluator)
+
+            if (switchEvaluator != null)
             {
                 switchFilterHidden = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
             }
 
             // if "Hidden" is specified in the attribute filter dynamic parameters
             // also return the object
-            if (exists && !directory && (!hidden || Force || showHidden || filterHidden || switchFilterHidden))
+            if (!isContainer)
             {
-                FileInfo fileObj = new FileInfo(path);
-
-                result = fileObj;
-                s_tracer.WriteLine("Got FileInfo: {0}", fileObj);
+                if (!hidden || Force || showHidden || filterHidden || switchFilterHidden)
+                {
+                    s_tracer.WriteLine("Got file info: {0}", result);
+                    return result;
+                }
             }
             else
             {
-                // if its not a file, maybe its a directory
-
-                DirectoryInfo directoryObj =
-                    new DirectoryInfo(path);
-
                 // Check to see if the path is the root of a file system drive.
                 // Since all root paths are hidden we need to show the directory
                 // anyway
-
                 bool isRootPath =
-                    String.Compare(
+                    string.Compare(
                         Path.GetPathRoot(path),
-                        directoryObj.FullName,
+                        result.FullName,
                         StringComparison.OrdinalIgnoreCase) == 0;
 
                 // if "Hidden" is specified in the attribute filter dynamic parameters
                 // also return the object
-                if (exists && (isRootPath || !hidden || Force || showHidden || filterHidden || switchFilterHidden))
+                if (isRootPath || !hidden || Force || showHidden || filterHidden || switchFilterHidden)
                 {
-                    Dbg.Diagnostics.Assert(
-                        (directoryObj.Attributes &
-                        FileAttributes.Directory) ==
-                        FileAttributes.Directory,
-                        "The object is not a directory?");
-
-                    result = directoryObj;
-
-                    isContainer = true;
-                    s_tracer.WriteLine("Got DirectoryInfo: {0}", directoryObj);
+                    s_tracer.WriteLine("Got directory info: {0}", result);
+                    return new DirectoryInfo(path);
                 }
             }
-            return result;
-        } // GetFileSystemItem
+
+            return null;
+        }
 
         /// <summary>
         /// Invokes the item at the path using ShellExecute semantics.
         /// </summary>
-        ///
         /// <param name="path">
         /// The item to invoke.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         protected override void InvokeDefaultAction(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -1329,11 +1404,11 @@ namespace Microsoft.PowerShell.Commands
                 var invokeProcess = new System.Diagnostics.Process();
                 invokeProcess.StartInfo.FileName = path;
 #if UNIX
-                bool invokeDefaultProgram = false;
+                bool useShellExecute = false;
                 if (Directory.Exists(path))
                 {
                     // Path points to a directory. We have to use xdg-open/open on Linux/macOS.
-                    invokeDefaultProgram = true;
+                    useShellExecute = true;
                 }
                 else
                 {
@@ -1346,19 +1421,13 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // Error code 13 -- Permission denied
                         // The file is possibly not an executable. We try xdg-open/open on Linux/macOS.
-                        invokeDefaultProgram = true;
+                        useShellExecute = true;
                     }
                 }
 
-                if (invokeDefaultProgram)
+                if (useShellExecute)
                 {
-                    const string quoteFormat = "\"{0}\"";
-                    invokeProcess.StartInfo.FileName = Platform.IsLinux ? "xdg-open" : /* macOS */ "open";
-                    if (NativeCommandParameterBinder.NeedQuotes(path))
-                    {
-                        path = string.Format(CultureInfo.InvariantCulture, quoteFormat, path);
-                    }
-                    invokeProcess.StartInfo.Arguments = path;
+                    invokeProcess.StartInfo.UseShellExecute = true;
                     invokeProcess.Start();
                 }
 #else
@@ -1367,7 +1436,7 @@ namespace Microsoft.PowerShell.Commands
                 invokeProcess.Start();
 #endif
             }
-        } // InvokeDefaultAction
+        }
 
         #endregion ItemCmdletProvider members
 
@@ -1377,24 +1446,19 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Gets the child items of a given directory.
         /// </summary>
-        ///
         /// <param name="path">
         /// The full path of the directory to enumerate.
         /// </param>
-        ///
         /// <param name="recurse">
         /// If true, recursively enumerates the child items as well.
         /// </param>
-        ///
         /// <param name="depth">
         /// Limits the depth of recursion; uint.MaxValue performs full recursion.
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  FileInfo and DirectoryInfo objects that match the filter are written to the
         /// context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
@@ -1404,29 +1468,24 @@ namespace Microsoft.PowerShell.Commands
             uint depth)
         {
             GetPathItems(path, recurse, depth, false, ReturnContainers.ReturnMatchingContainers);
-        } // GetChildItems
+        }
         #endregion GetChildItems
-
 
         #region GetChildNames
         /// <summary>
         /// Gets the path names for all children of the specified
         /// directory that match the given filter.
         /// </summary>
-        ///
         /// <param name="path">
         /// The full path of the directory to enumerate.
         /// </param>
-        ///
         /// <param name="returnContainers">
         /// Determines if all containers should be returned or only those containers that match the
         /// filter(s).
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  Child names are written to the context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
@@ -1435,14 +1494,13 @@ namespace Microsoft.PowerShell.Commands
             ReturnContainers returnContainers)
         {
             GetPathItems(path, false, uint.MaxValue, true, returnContainers);
-        } // GetChildNames
+        }
         #endregion GetChildNames
 
         /// <summary>
         /// Gets a new provider-specific path and filter (if any) that corresponds to the given
         /// path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to the item. Unlike most other provider APIs, this path is likely to
         /// contain PowerShell wildcards.
@@ -1456,17 +1514,14 @@ namespace Microsoft.PowerShell.Commands
         /// <param name="updatedFilter">
         /// The new filter.
         /// </param>
-        ///
         /// <returns>
         /// True if the path or filter were altered. False otherwise.
         /// </returns>
-        ///
         /// <remarks>
         /// Makes no attempt to filter if the user has already specified a filter, or
         /// if the path contains directory separators. Those are not supported by the
         /// FileSystem filter.
         /// </remarks>
-        ///
         protected override bool ConvertPath(
             string path,
             string filter,
@@ -1475,9 +1530,9 @@ namespace Microsoft.PowerShell.Commands
         {
             // Don't handle full paths, paths that the user is already trying to
             // filter, or paths they are trying to escape.
-            if ((!String.IsNullOrEmpty(filter)) ||
-                (path.Contains(StringLiterals.DefaultPathSeparatorString)) ||
-                (path.Contains(StringLiterals.AlternatePathSeparatorString)) ||
+            if ((!string.IsNullOrEmpty(filter)) ||
+                (path.Contains(StringLiterals.DefaultPathSeparator, StringComparison.Ordinal)) ||
+                (path.Contains(StringLiterals.AlternatePathSeparator, StringComparison.Ordinal)) ||
                 (path.Contains(StringLiterals.EscapeCharacter)))
             {
                 return false;
@@ -1501,7 +1556,6 @@ namespace Microsoft.PowerShell.Commands
             // Our algorithm here is pretty simple. The filesystem can handle
             // * and ? in PowerShell wildcards, just not character ranges [a-z].
             // We replace character ranges with the single-character wildcard, '?'.
-
             updatedPath = path;
             updatedFilter = System.Text.RegularExpressions.Regex.Replace(path, "\\[.*?\\]", "?");
 
@@ -1516,28 +1570,19 @@ namespace Microsoft.PowerShell.Commands
             ReturnContainers returnContainers)
         {
             // Verify parameters
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
             path = NormalizePath(path);
 
-            // Get the directory object
-            bool isDirectory;
-            Exception accessException;
-            bool exists = Utils.NativeItemExists(path, out isDirectory, out accessException);
+            var fsinfo = GetFileSystemInfo(path, out bool isDirectory);
 
-            if (accessException != null)
-            {
-                throw accessException;
-            }
-
-            if (exists)
+            if (fsinfo != null)
             {
                 if (isDirectory)
                 {
-                    DirectoryInfo directory = new DirectoryInfo(path);
                     InodeTracker tracker = null;
 
                     if (recurse)
@@ -1545,18 +1590,15 @@ namespace Microsoft.PowerShell.Commands
                         GetChildDynamicParameters fspDynamicParam = DynamicParameters as GetChildDynamicParameters;
                         if (fspDynamicParam != null && fspDynamicParam.FollowSymlink)
                         {
-                            tracker = new InodeTracker(directory.FullName);
+                            tracker = new InodeTracker(fsinfo.FullName);
                         }
                     }
 
                     // Enumerate the directory
-                    Dir(directory, recurse, depth, nameOnly, returnContainers, tracker);
+                    Dir((DirectoryInfo)fsinfo, recurse, depth, nameOnly, returnContainers, tracker);
                 }
                 else
                 {
-                    // Maybe the path is a file name so try a FileInfo instead
-                    FileInfo fileInfo = new FileInfo(path);
-
                     FlagsExpression<FileAttributes> evaluator = null;
                     FlagsExpression<FileAttributes> switchEvaluator = null;
                     GetChildDynamicParameters fspDynamicParam = DynamicParameters as GetChildDynamicParameters;
@@ -1571,18 +1613,19 @@ namespace Microsoft.PowerShell.Commands
                     bool filterHidden = false;           // "Hidden" is specified somewhere in the expression
                     bool switchFilterHidden = false;     // "Hidden" is specified somewhere in the parameters
 
-                    if (null != evaluator)
+                    if (evaluator != null)
                     {
-                        attributeFilter = evaluator.Evaluate(fileInfo.Attributes);  // expressions
+                        attributeFilter = evaluator.Evaluate(fsinfo.Attributes);  // expressions
                         filterHidden = evaluator.ExistsInExpression(FileAttributes.Hidden);
                     }
-                    if (null != switchEvaluator)
+
+                    if (switchEvaluator != null)
                     {
-                        switchAttributeFilter = switchEvaluator.Evaluate(fileInfo.Attributes);  // switch parameters
+                        switchAttributeFilter = switchEvaluator.Evaluate(fsinfo.Attributes);  // switch parameters
                         switchFilterHidden = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
                     }
 
-                    bool hidden = (fileInfo.Attributes & FileAttributes.Hidden) != 0;
+                    bool hidden = (fsinfo.Attributes & FileAttributes.Hidden) != 0;
 
                     // if "Hidden" is explicitly specified anywhere in the attribute filter, then override
                     // default hidden attribute filter.
@@ -1592,18 +1635,20 @@ namespace Microsoft.PowerShell.Commands
                         if (nameOnly)
                         {
                             WriteItemObject(
-                                fileInfo.Name,
-                                fileInfo.FullName,
+                                fsinfo.Name,
+                                fsinfo.FullName,
                                 false);
                         }
                         else
-                            WriteItemObject(fileInfo, path, false);
+                        {
+                            WriteItemObject(fsinfo, path, false);
+                        }
                     }
                 }
             }
             else
             {
-                String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                 Exception e = new IOException(error);
                 WriteError(new ErrorRecord(
                     e,
@@ -1637,7 +1682,7 @@ namespace Microsoft.PowerShell.Commands
                     else
                     {
                         // Filter the directories
-                        target.Add(directory.EnumerateDirectories(Filter));
+                        target.Add(directory.EnumerateDirectories(Filter, _enumerationOptions));
                     }
 
                     // Making sure to obey the StopProcessing.
@@ -1648,7 +1693,7 @@ namespace Microsoft.PowerShell.Commands
 
                     // Use the specified filter when retrieving the
                     // children
-                    target.Add(directory.EnumerateFiles(Filter));
+                    target.Add(directory.EnumerateFiles(Filter, _enumerationOptions));
                 }
                 else
                 {
@@ -1697,12 +1742,13 @@ namespace Microsoft.PowerShell.Commands
                             // 'Hidden' is specified somewhere in the parameters
                             bool switchFilterHidden = false;
 
-                            if (null != evaluator)
+                            if (evaluator != null)
                             {
                                 attributeFilter = evaluator.Evaluate(filesystemInfo.Attributes);
                                 filterHidden = evaluator.ExistsInExpression(FileAttributes.Hidden);
                             }
-                            if (null != switchEvaluator)
+
+                            if (switchEvaluator != null)
                             {
                                 switchAttributeFilter = switchEvaluator.Evaluate(filesystemInfo.Attributes);
                                 switchFilterHidden = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
@@ -1735,9 +1781,13 @@ namespace Microsoft.PowerShell.Commands
                                 else
                                 {
                                     if (filesystemInfo is FileInfo)
+                                    {
                                         WriteItemObject(filesystemInfo, filesystemInfo.FullName, false);
+                                    }
                                     else
+                                    {
                                         WriteItemObject(filesystemInfo, filesystemInfo.FullName, true);
+                                    }
                                 }
                             }
                         }
@@ -1749,18 +1799,18 @@ namespace Microsoft.PowerShell.Commands
                         {
                             WriteError(new ErrorRecord(ex, "DirUnauthorizedAccessError", ErrorCategory.PermissionDenied, directory.FullName));
                         }
-                    }// foreach
-                }// foreach
-
+                    }
+                }
 
                 bool isFilterHiddenSpecified = false;           // "Hidden" is specified somewhere in the expression
                 bool isSwitchFilterHiddenSpecified = false;     // "Hidden" is specified somewhere in the parameters
 
-                if (null != evaluator)
+                if (evaluator != null)
                 {
                     isFilterHiddenSpecified = evaluator.ExistsInExpression(FileAttributes.Hidden);
                 }
-                if (null != switchEvaluator)
+
+                if (switchEvaluator != null)
                 {
                     isSwitchFilterHiddenSpecified = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
                 }
@@ -1795,9 +1845,10 @@ namespace Microsoft.PowerShell.Commands
                                 //  a) the user has asked to with the -FollowSymLinks switch parameter and
                                 //  b) the directory pointed to by the symlink has not already been visited,
                                 //     preventing symlink loops.
+                                //  c) it is not a reparse point with a target
                                 if (tracker == null)
                                 {
-                                    if (InternalSymbolicLinkLinkCodeMethods.IsReparsePoint(recursiveDirectory))
+                                    if (InternalSymbolicLinkLinkCodeMethods.IsReparsePointWithTarget(recursiveDirectory))
                                     {
                                         continue;
                                     }
@@ -1811,9 +1862,9 @@ namespace Microsoft.PowerShell.Commands
 
                                 Dir(recursiveDirectory, recurse, depth - 1, nameOnly, returnContainers, tracker);
                             }
-                        }//foreach
-                    }//if
-                }//if
+                        }
+                    }
+                }
             }
             catch (ArgumentException argException)
             {
@@ -1829,7 +1880,7 @@ namespace Microsoft.PowerShell.Commands
                 // 2004/10/13-JonN removed ResourceActionFailedException wrapper
                 WriteError(new ErrorRecord(uae, "DirUnauthorizedAccessError", ErrorCategory.PermissionDenied, directory.FullName));
             }
-        } // Dir
+        }
 
         /// <summary>
         /// Create an enum expression evaluator for user-specified attribute filtering
@@ -1850,18 +1901,22 @@ namespace Microsoft.PowerShell.Commands
             {
                 sb.Append("+Directory");
             }
+
             if (((GetChildDynamicParameters)DynamicParameters).File)
             {
                 sb.Append("+!Directory");
             }
+
             if (((GetChildDynamicParameters)DynamicParameters).System)
             {
                 sb.Append("+System");
             }
+
             if (((GetChildDynamicParameters)DynamicParameters).ReadOnly)
             {
                 sb.Append("+ReadOnly");
             }
+
             if (((GetChildDynamicParameters)DynamicParameters).Hidden)
             {
                 sb.Append("+Hidden");
@@ -1869,7 +1924,7 @@ namespace Microsoft.PowerShell.Commands
 
             string switchParamString = sb.ToString();
 
-            if (!String.IsNullOrEmpty(switchParamString))
+            if (!string.IsNullOrEmpty(switchParamString))
             {
                 // Remove unnecessary PLUS sign
                 switchParamEvaluator = new FlagsExpression<FileAttributes>(switchParamString.Substring(1));
@@ -1879,32 +1934,102 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Provides a mode property for FileSystemInfo
+        /// Provides a mode property for FileSystemInfo.
         /// </summary>
-        /// <param name="instance">instance of PSObject wrapping a FileSystemInfo</param>
+        /// <param name="instance">Instance of PSObject wrapping a FileSystemInfo.</param>
+        /// <returns>A string representation of the FileAttributes, with one letter per attribute.</returns>
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
-        public static string Mode(PSObject instance)
+        public static string Mode(PSObject instance) => Mode(instance, excludeHardLink: false);
+
+        /// <summary>
+        /// Provides a ModeWithoutHardLink property for FileSystemInfo, without HardLinks for performance reasons.
+        /// </summary>
+        /// <param name="instance">Instance of PSObject wrapping a FileSystemInfo.</param>
+        /// <returns>A string representation of the FileAttributes, with one letter per attribute.</returns>
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
+        public static string ModeWithoutHardLink(PSObject instance) => Mode(instance, excludeHardLink: true);
+
+        private static string Mode(PSObject instance, bool excludeHardLink)
         {
-            if (instance == null)
-                return String.Empty;
+            string ToModeString(FileSystemInfo fileSystemInfo)
+            {
+                FileAttributes fileAttributes = fileSystemInfo.Attributes;
 
-            FileSystemInfo fileInfo = (FileSystemInfo)instance.BaseObject;
-            if (fileInfo == null)
-                return String.Empty;
+                bool isReparsePoint = InternalSymbolicLinkLinkCodeMethods.IsReparsePoint(fileSystemInfo);
+                bool isLink = isReparsePoint || (excludeHardLink ? false : InternalSymbolicLinkLinkCodeMethods.IsHardLink(fileSystemInfo));
+                if (!isLink)
+                {
+                    // special casing for the common cases - no allocations
+                    switch (fileAttributes)
+                    {
+                        case FileAttributes.Archive:
+                            return "-a---";
+                        case FileAttributes.Directory:
+                            return "d----";
+                        case FileAttributes.Normal:
+                            return "-----";
+                        case FileAttributes.Directory | FileAttributes.ReadOnly:
+                            return "d-r--";
+                        case FileAttributes.Archive | FileAttributes.ReadOnly:
+                            return "-ar--";
+                    }
+                }
 
-            char[] mode = new char[6];
-            mode[0] = (fileInfo.Attributes & FileAttributes.Directory) == FileAttributes.Directory ? 'd' : '-';
-            mode[1] = (fileInfo.Attributes & FileAttributes.Archive) == FileAttributes.Archive ? 'a' : '-';
-            mode[2] = (fileInfo.Attributes & FileAttributes.ReadOnly) == FileAttributes.ReadOnly ? 'r' : '-';
-            mode[3] = (fileInfo.Attributes & FileAttributes.Hidden) == FileAttributes.Hidden ? 'h' : '-';
-            mode[4] = (fileInfo.Attributes & FileAttributes.System) == FileAttributes.System ? 's' : '-';
-            // Mark the last bit as a "l" if it's a reparsepoint (symbolic link or junction)
-            // Porting note: these need to be handled specially
-            bool isReparsePoint = InternalSymbolicLinkLinkCodeMethods.IsReparsePoint(fileInfo);
-            bool isHardLink = InternalSymbolicLinkLinkCodeMethods.IsHardLink(fileInfo);
-            mode[5] = isReparsePoint || isHardLink ? 'l' : '-';
+                bool isDirectory = fileAttributes.HasFlag(FileAttributes.Directory);
+                ReadOnlySpan<char> mode = stackalloc char[]
+                {
+                    isLink ? 'l' : isDirectory ? 'd' : '-',
+                    fileAttributes.HasFlag(FileAttributes.Archive) ? 'a' : '-',
+                    fileAttributes.HasFlag(FileAttributes.ReadOnly) ? 'r' : '-',
+                    fileAttributes.HasFlag(FileAttributes.Hidden) ? 'h' : '-',
+                    fileAttributes.HasFlag(FileAttributes.System) ? 's' : '-',
+                };
+                return new string(mode);
+            }
 
-            return new string(mode);
+            return instance?.BaseObject is FileSystemInfo fileInfo
+                ? ToModeString(fileInfo)
+                : string.Empty;
+        }
+
+        /// <summary>
+        /// Provides a NameString property for FileSystemInfo.
+        /// </summary>
+        /// <param name="instance">Instance of PSObject wrapping a FileSystemInfo.</param>
+        /// <returns>Name if a file or directory, Name -> Target if symlink.</returns>
+        public static string NameString(PSObject instance)
+        {
+            return instance?.BaseObject is FileSystemInfo fileInfo
+                ? InternalSymbolicLinkLinkCodeMethods.IsReparsePointWithTarget(fileInfo)
+                    ? $"{fileInfo.Name} -> {InternalSymbolicLinkLinkCodeMethods.GetTarget(instance)}"
+                    : fileInfo.Name
+                : string.Empty;
+        }
+
+        /// <summary>
+        /// Provides a LengthString property for FileSystemInfo.
+        /// </summary>
+        /// <param name="instance">Instance of PSObject wrapping a FileSystemInfo.</param>
+        /// <returns>Length as a string.</returns>
+        public static string LengthString(PSObject instance)
+        {
+            return instance?.BaseObject is FileInfo fileInfo
+                ? fileInfo.Attributes.HasFlag(FileAttributes.Offline)
+                    ? $"({fileInfo.Length})"
+                    : fileInfo.Length.ToString()
+                : string.Empty;
+        }
+
+        /// <summary>
+        /// Provides a LastWriteTimeString property for FileSystemInfo.
+        /// </summary>
+        /// <param name="instance">Instance of PSObject wrapping a FileSystemInfo.</param>
+        /// <returns>LastWriteTime formatted as short date + short time.</returns>
+        public static string LastWriteTimeString(PSObject instance)
+        {
+            return instance?.BaseObject is FileSystemInfo fileInfo
+                ? string.Format(CultureInfo.CurrentCulture, "{0,10:d} {0,8:t}", fileInfo.LastWriteTime)
+                : string.Empty;
         }
 
         #region RenameItem
@@ -1912,20 +2037,16 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Renames a file or directory.
         /// </summary>
-        ///
         /// <param name="path">
         /// The current full path to the file or directory.
         /// </param>
-        ///
         /// <param name="newName">
         /// The new full path to the file or directory.
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  The renamed DirectoryInfo or FileInfo object is
         /// written to the context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         ///     newName is null or empty
@@ -1935,36 +2056,34 @@ namespace Microsoft.PowerShell.Commands
             string newName)
         {
             // Check the parameters
-
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
             path = NormalizePath(path);
 
-            if (String.IsNullOrEmpty(newName))
-
+            if (string.IsNullOrEmpty(newName))
             {
                 throw PSTraceSource.NewArgumentException("newName");
             }
 
             // Clean up "newname" to fix some common usability problems:
             // Rename .\foo.txt .\bar.txt
-            // Rename c:\temp\foo.txt c:\temp\bar.txt
+            // Rename C:\temp\foo.txt C:\temp\bar.txt
             if (newName.StartsWith(".\\", StringComparison.OrdinalIgnoreCase) ||
                 newName.StartsWith("./", StringComparison.OrdinalIgnoreCase))
             {
                 newName = newName.Remove(0, 2);
             }
-            else if (String.Equals(Path.GetDirectoryName(path), Path.GetDirectoryName(newName), StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(Path.GetDirectoryName(path), Path.GetDirectoryName(newName), StringComparison.OrdinalIgnoreCase))
             {
                 newName = Path.GetFileName(newName);
             }
 
-            //Check to see if the target specified is just filename. We dont allow rename to move the file to a different directory.
-            //If a path is specified for the newName then we flag that as an error.
-            if (String.Compare(Path.GetFileName(newName), newName, StringComparison.OrdinalIgnoreCase) != 0)
+            // Check to see if the target specified is just filename. We dont allow rename to move the file to a different directory.
+            // If a path is specified for the newName then we flag that as an error.
+            if (string.Compare(Path.GetFileName(newName), newName, StringComparison.OrdinalIgnoreCase) != 0)
             {
                 throw PSTraceSource.NewArgumentException("newName", FileSystemProviderStrings.RenameError);
             }
@@ -1984,17 +2103,14 @@ namespace Microsoft.PowerShell.Commands
                 if (isContainer)
                 {
                     // Get the DirectoryInfo
-
                     DirectoryInfo dir = new DirectoryInfo(path);
 
                     // Generate the new path which the directory will
                     // be renamed to.
-
                     string parentDirectory = dir.Parent.FullName;
                     string newPath = MakePath(parentDirectory, newName);
 
                     // Confirm the rename with the user
-
                     string action = FileSystemProviderStrings.RenameItemActionDirectory;
 
                     string resource = StringUtil.Format(FileSystemProviderStrings.RenameItemResourceFileTemplate, dir.FullName, newPath);
@@ -2011,16 +2127,13 @@ namespace Microsoft.PowerShell.Commands
                 else
                 {
                     // Get the FileInfo
-
                     FileInfo file = new FileInfo(path);
 
                     // Generate the new path which the file will be renamed to.
-
                     string parentDirectory = file.DirectoryName;
                     string newPath = MakePath(parentDirectory, newName);
 
                     // Confirm the rename with the user
-
                     string action = FileSystemProviderStrings.RenameItemActionFile;
 
                     string resource = StringUtil.Format(FileSystemProviderStrings.RenameItemResourceFileTemplate, file.FullName, newPath);
@@ -2041,14 +2154,14 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "RenameItemIOError", ErrorCategory.WriteError, path));
             }
             catch (UnauthorizedAccessException accessException)
             {
                 WriteError(new ErrorRecord(accessException, "RenameItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
             }
-        } // RenameItem
+        }
 
         #endregion RenameItem
 
@@ -2057,26 +2170,21 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Creates a file or directory with the given path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the file or directory to create.
         /// </param>
-        ///
         ///<param name="type">
         /// Specify "file" to create a file.
         /// Specify "directory" or "container" to create a directory.
         /// </param>
-        ///
         /// <param name="value">
         /// If <paramref name="type" /> is "file" then this parameter becomes the content
         /// of the file to be created.
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  The new DirectoryInfo or FileInfo object is
         /// written to the context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         ///     type is null or empty.
@@ -2089,13 +2197,12 @@ namespace Microsoft.PowerShell.Commands
             ItemType itemType = ItemType.Unknown;
 
             // Verify parameters
-
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
-            if (String.IsNullOrEmpty(type))
+            if (string.IsNullOrEmpty(type))
             {
                 type = "file";
             }
@@ -2126,10 +2233,8 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // If force is specified, overwrite the existing
                         // file
-
                         fileMode = FileMode.Create;
                     }
-
 
                     string action = FileSystemProviderStrings.NewItemActionFile;
 
@@ -2139,7 +2244,6 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // Create the file with read/write access and
                         // not allowing sharing.
-
                         using (FileStream newFile =
                             new FileStream(
                                 path,
@@ -2162,7 +2266,7 @@ namespace Microsoft.PowerShell.Commands
                 }
                 catch (IOException exception)
                 {
-                    //IOException contains specific message about the error occured and so no need for errordetails.
+                    // IOException contains specific message about the error occured and so no need for errordetails.
                     WriteError(new ErrorRecord(exception, "NewItemIOError", ErrorCategory.WriteError, path));
                 }
                 catch (UnauthorizedAccessException accessException)
@@ -2174,18 +2278,22 @@ namespace Microsoft.PowerShell.Commands
             {
                 string action = null;
                 if (itemType == ItemType.SymbolicLink)
+                {
                     action = FileSystemProviderStrings.NewItemActionSymbolicLink;
+                }
                 else if (itemType == ItemType.HardLink)
+                {
                     action = FileSystemProviderStrings.NewItemActionHardLink;
+                }
 
                 string resource = StringUtil.Format(FileSystemProviderStrings.NewItemActionTemplate, path);
 
                 if (ShouldProcess(resource, action))
                 {
                     bool isDirectory = false;
-                    string strTargetPath = value.ToString();
+                    string strTargetPath = value?.ToString();
 
-                    if (String.IsNullOrEmpty(strTargetPath))
+                    if (string.IsNullOrEmpty(strTargetPath))
                     {
                         throw PSTraceSource.NewArgumentNullException("value");
                     }
@@ -2197,9 +2305,13 @@ namespace Microsoft.PowerShell.Commands
                     // non-existing targets on either Windows or Linux.
                     try
                     {
-                        exists = CheckItemExists(strTargetPath, out isDirectory);
+                        exists = GetFileSystemInfo(strTargetPath, out isDirectory) != null;
+
+                        // Pretend the target exists if we're making a symbolic link.
                         if (itemType == ItemType.SymbolicLink)
-                            exists = true; // pretend the target exists if we're making a symbolic link
+                        {
+                            exists = true;
+                        }
                     }
                     catch (Exception e)
                     {
@@ -2216,7 +2328,7 @@ namespace Microsoft.PowerShell.Commands
 
                     if (itemType == ItemType.HardLink)
                     {
-                        //Hard links can only be to files, not directories.
+                        // Hard links can only be to files, not directories.
                         if (isDirectory == true)
                         {
                             string message = StringUtil.Format(FileSystemProviderStrings.ItemNotFile, strTargetPath);
@@ -2230,7 +2342,7 @@ namespace Microsoft.PowerShell.Commands
 
                     try
                     {
-                        symLinkExists = CheckItemExists(path, out isSymLinkDirectory);
+                        symLinkExists = GetFileSystemInfo(path, out isSymLinkDirectory) != null;
                     }
                     catch (Exception e)
                     {
@@ -2266,7 +2378,9 @@ namespace Microsoft.PowerShell.Commands
                                 WriteError(new ErrorRecord(exception, "NewItemDeleteIOError", ErrorCategory.WriteError, path));
                             }
                             else
+                            {
                                 throw;
+                            }
                         }
                     }
                     else
@@ -2308,7 +2422,7 @@ namespace Microsoft.PowerShell.Commands
 #if UNIX
                         if (Platform.Unix.GetErrorCategory(errorCode) == ErrorCategory.PermissionDenied)
 #else
-                        if (errorCode == 1314) //ERROR_PRIVILEGE_NOT_HELD
+                        if (errorCode == 1314) // ERROR_PRIVILEGE_NOT_HELD
 #endif
                         {
                             string message = FileSystemProviderStrings.ElevationRequired;
@@ -2316,13 +2430,17 @@ namespace Microsoft.PowerShell.Commands
                             return;
                         }
 
-                        if (errorCode == 1) //ERROR_INVALID_FUNCTION
+                        if (errorCode == 1) // ERROR_INVALID_FUNCTION
                         {
                             string message = null;
                             if (itemType == ItemType.SymbolicLink)
+                            {
                                 message = FileSystemProviderStrings.SymbolicLinkNotSupported;
+                            }
                             else
+                            {
                                 message = FileSystemProviderStrings.HardLinkNotSupported;
+                            }
 
                             WriteError(new ErrorRecord(new InvalidOperationException(message, w32Exception), "NewItemInvalidOperation", ErrorCategory.InvalidOperation, value.ToString()));
                             return;
@@ -2353,13 +2471,13 @@ namespace Microsoft.PowerShell.Commands
                 if (ShouldProcess(resource, action))
                 {
                     bool isDirectory = false;
-                    string strTargetPath = value.ToString();
+                    string strTargetPath = value?.ToString();
 
                     bool exists = false;
 
                     try
                     {
-                        exists = CheckItemExists(strTargetPath, out isDirectory);
+                        exists = GetFileSystemInfo(strTargetPath, out isDirectory) != null;
                     }
                     catch (Exception e)
                     {
@@ -2373,7 +2491,7 @@ namespace Microsoft.PowerShell.Commands
                         return;
                     }
 
-                    //Junctions can only be directories.
+                    // Junctions can only be directories.
                     if (!isDirectory)
                     {
                         string message = StringUtil.Format(FileSystemProviderStrings.ItemNotDirectory, value);
@@ -2382,12 +2500,11 @@ namespace Microsoft.PowerShell.Commands
                     }
 
                     bool isPathDirectory = false;
-
-                    bool pathExists = false;
+                    FileSystemInfo pathDirInfo;
 
                     try
                     {
-                        pathExists = CheckItemExists(path, out isPathDirectory);
+                        pathDirInfo = GetFileSystemInfo(path, out isPathDirectory);
                     }
                     catch (Exception e)
                     {
@@ -2395,11 +2512,11 @@ namespace Microsoft.PowerShell.Commands
                         return;
                     }
 
-                    DirectoryInfo pathDirInfo = new DirectoryInfo(path);
+                    bool pathExists = pathDirInfo != null;
 
                     if (pathExists)
                     {
-                        //Junctions can only be directories.
+                        // Junctions can only be directories.
                         if (!isPathDirectory)
                         {
                             string message = StringUtil.Format(FileSystemProviderStrings.ItemNotDirectory, path);
@@ -2407,8 +2524,8 @@ namespace Microsoft.PowerShell.Commands
                             return;
                         }
 
-                        //Junctions cannot have files
-                        if (DirectoryInfoHasChildItems(pathDirInfo))
+                        // Junctions cannot have files
+                        if (DirectoryInfoHasChildItems((DirectoryInfo)pathDirInfo))
                         {
                             string message = StringUtil.Format(FileSystemProviderStrings.DirectoryNotEmpty, path);
                             WriteError(new ErrorRecord(new IOException(message), "DirectoryNotEmpty", ErrorCategory.WriteError, path));
@@ -2431,13 +2548,16 @@ namespace Microsoft.PowerShell.Commands
                                     WriteError(new ErrorRecord(exception, "NewItemDeleteIOError", ErrorCategory.WriteError, path));
                                 }
                                 else
+                                {
                                     throw;
+                                }
                             }
                         }
                     }
                     else
                     {
                         CreateDirectory(path, false);
+                        pathDirInfo = new DirectoryInfo(path);
                     }
 
                     try
@@ -2448,7 +2568,7 @@ namespace Microsoft.PowerShell.Commands
                         {
                             WriteItemObject(pathDirInfo, path, true);
                         }
-                        else //rollback the directory creation if we created it.
+                        else // rollback the directory creation if we created it.
                         {
                             if (!pathExists)
                             {
@@ -2458,7 +2578,7 @@ namespace Microsoft.PowerShell.Commands
                     }
                     catch (Exception exception)
                     {
-                        //rollback the directory creation if it was created.
+                        // rollback the directory creation if it was created.
                         if (!pathExists)
                         {
                             pathDirInfo.Delete();
@@ -2478,7 +2598,9 @@ namespace Microsoft.PowerShell.Commands
                             WriteError(new ErrorRecord(exception, "NewItemCreateIOError", ErrorCategory.WriteError, path));
                         }
                         else
+                        {
                             throw;
+                        }
                     }
                 }
             }
@@ -2486,13 +2608,21 @@ namespace Microsoft.PowerShell.Commands
             {
                 throw PSTraceSource.NewArgumentException("type", FileSystemProviderStrings.UnknownType);
             }
-        } // NewItem
+        }
 
         private static bool WinCreateSymbolicLink(string path, string strTargetPath, bool isDirectory)
         {
-            int created = NativeMethods.CreateSymbolicLink(path, strTargetPath, (isDirectory ? 1 : 0));
-            bool success = (created == 1) ? true : false;
-            return success;
+            // The new AllowUnprivilegedCreate is only available on Win10 build 14972 or newer
+            var flags = isDirectory ? NativeMethods.SymbolicLinkFlags.Directory : NativeMethods.SymbolicLinkFlags.File;
+
+            Version minBuildOfDeveloperMode = new Version(10, 0, 14972, 0);
+            if (Environment.OSVersion.Version >= minBuildOfDeveloperMode)
+            {
+                flags |= NativeMethods.SymbolicLinkFlags.AllowUnprivilegedCreate;
+            }
+
+            var created = NativeMethods.CreateSymbolicLink(path, strTargetPath, flags);
+            return created;
         }
 
         private static bool WinCreateHardLink(string path, string strTargetPath)
@@ -2507,26 +2637,6 @@ namespace Microsoft.PowerShell.Commands
             return junctionCreated;
         }
 
-        /// <summary>
-        /// Checks if the item exists and throws exception on access.
-        /// </summary>
-        /// <param name="strTargetPath"></param>
-        /// <param name="isDirectory"></param>
-        /// <returns></returns>
-        private static bool CheckItemExists(string strTargetPath, out bool isDirectory)
-        {
-            Exception accessException;
-
-            bool exists = Utils.NativeItemExists(strTargetPath, out isDirectory, out accessException);
-
-            if (accessException != null)
-            {
-                throw accessException;
-            }
-
-            return exists;
-        }
-
         private enum ItemType
         {
             Unknown,
@@ -2536,7 +2646,6 @@ namespace Microsoft.PowerShell.Commands
             Junction,
             HardLink
         };
-
 
         private static ItemType GetItemType(string input)
         {
@@ -2573,21 +2682,18 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Creates a directory at the specified path
+        /// Creates a directory at the specified path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the directory to create
         /// </param>
-        ///
         /// <param name="streamOutput">
         /// Determines if the directory should be streamed out after being created.
         /// </param>
-        ///
         private void CreateDirectory(string path, bool streamOutput)
         {
             Dbg.Diagnostics.Assert(
-                !String.IsNullOrEmpty(path),
+                !string.IsNullOrEmpty(path),
                 "The caller should verify path");
 
             // Get the parent path
@@ -2599,7 +2705,7 @@ namespace Microsoft.PowerShell.Commands
             ErrorRecord error = null;
             if (!Force && ItemExists(path, out error))
             {
-                String errorMessage = StringUtil.Format(FileSystemProviderStrings.DirectoryExist, path);
+                string errorMessage = StringUtil.Format(FileSystemProviderStrings.DirectoryExist, path);
                 Exception e = new IOException(errorMessage);
 
                 WriteError(new ErrorRecord(
@@ -2625,10 +2731,7 @@ namespace Microsoft.PowerShell.Commands
 
                 if (ShouldProcess(resource, action))
                 {
-                    // Use the parent directory to create the sub-directory
-
-                    DirectoryInfo parentDirectory = new DirectoryInfo(parentPath);
-                    DirectoryInfo result = parentDirectory.CreateSubdirectory(childName);
+                    var result = Directory.CreateDirectory(Path.Combine(parentPath, childName));
 
                     if (streamOutput)
                     {
@@ -2644,10 +2747,9 @@ namespace Microsoft.PowerShell.Commands
             catch (IOException ioException)
             {
                 // Ignore the error if force was specified
-
                 if (!Force)
                 {
-                    //IOException contains specific message about the error occured and so no need for errordetails.
+                    // IOException contains specific message about the error occured and so no need for errordetails.
                     WriteError(new ErrorRecord(ioException, "CreateDirectoryIOError", ErrorCategory.WriteError, path));
                 }
             }
@@ -2655,13 +2757,13 @@ namespace Microsoft.PowerShell.Commands
             {
                 WriteError(new ErrorRecord(accessException, "CreateDirectoryUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
             }
-        } // CreateDirectory
+        }
 
         private bool CreateIntermediateDirectories(string path)
         {
             bool result = false;
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -2670,14 +2772,13 @@ namespace Microsoft.PowerShell.Commands
             {
                 // Push the paths of the missing directories onto a stack such that the highest missing
                 // parent in the tree is at the top of the stack.
-
-                Stack<String> missingDirectories = new Stack<String>();
+                Stack<string> missingDirectories = new Stack<string>();
 
                 string previousParent = path;
 
                 do
                 {
-                    string root = String.Empty;
+                    string root = string.Empty;
 
                     if (PSDriveInfo != null)
                     {
@@ -2686,8 +2787,8 @@ namespace Microsoft.PowerShell.Commands
 
                     string parentPath = GetParentPath(path, root);
 
-                    if (!String.IsNullOrEmpty(parentPath) &&
-                        String.Compare(
+                    if (!string.IsNullOrEmpty(parentPath) &&
+                        string.Compare(
                             parentPath,
                             previousParent,
                             StringComparison.OrdinalIgnoreCase) != 0)
@@ -2705,15 +2806,16 @@ namespace Microsoft.PowerShell.Commands
                     {
                         break;
                     }
+
                     previousParent = parentPath;
-                } while (!String.IsNullOrEmpty(previousParent));
+                } while (!string.IsNullOrEmpty(previousParent));
 
                 // Now create the missing directories
-
                 foreach (string directoryPath in missingDirectories)
                 {
                     CreateDirectory(directoryPath, false);
                 }
+
                 result = true;
             }
             catch (ArgumentException argException)
@@ -2722,7 +2824,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "CreateIntermediateDirectoriesIOError", ErrorCategory.WriteError, path));
             }
             catch (UnauthorizedAccessException accessException)
@@ -2731,8 +2833,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // CreateIntermediateDirectories
-
+        }
 
         #endregion NewItem
 
@@ -2741,21 +2842,18 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Removes the specified file or directory.
         /// </summary>
-        ///
         /// <param name="path">
         /// The full path to the file or directory to be removed.
         /// </param>
-        ///
         /// <param name="recurse">
         /// Specifies if the operation should also remove child items.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         protected override void RemoveItem(string path, bool recurse)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -2796,11 +2894,10 @@ namespace Microsoft.PowerShell.Commands
                 }
 #endif
 
-                bool iscontainer = false;
-                FileSystemInfo fsinfo = GetFileSystemInfo(path, ref iscontainer);
+                FileSystemInfo fsinfo = GetFileSystemInfo(path, out bool iscontainer);
                 if (fsinfo == null)
                 {
-                    String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                    string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                     Exception e = new IOException(error);
                     WriteError(new ErrorRecord(e, "ItemDoesNotExist", ErrorCategory.ObjectNotFound, path));
                     return;
@@ -2834,9 +2931,10 @@ namespace Microsoft.PowerShell.Commands
                             foreach (AlternateStreamData stream in AlternateDataStreamUtilities.GetStreams(fsinfo.FullName))
                             {
                                 if (!p.IsMatch(stream.Stream)) { continue; }
+
                                 foundStream = true;
 
-                                string action = String.Format(
+                                string action = string.Format(
                                     CultureInfo.InvariantCulture,
                                     FileSystemProviderStrings.StreamAction,
                                     stream.Stream, fsinfo.FullName);
@@ -2869,20 +2967,20 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException exception)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(exception, "RemoveItemIOError", ErrorCategory.WriteError, path));
             }
             catch (UnauthorizedAccessException accessException)
             {
                 WriteError(new ErrorRecord(accessException, "RemoveItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
             }
-        } // RemoveItem
+        }
 
         /// <summary>
-        /// Retrieves the dynamic parameters required for the Remove-Item cmdlet
+        /// Retrieves the dynamic parameters required for the Remove-Item cmdlet.
         /// </summary>
-        /// <param name="path">The path of the file to process</param>
-        /// <param name="recurse">Whether to recurse into containers</param>
+        /// <param name="path">The path of the file to process.</param>
+        /// <param name="recurse">Whether to recurse into containers.</param>
         /// <returns>An instance of the FileSystemProviderRemoveItemDynamicParameters class that represents the dynamic parameters.</returns>
         protected override object RemoveItemDynamicParameters(string path, bool recurse)
         {
@@ -2899,26 +2997,21 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Removes a directory from the file system.
         /// </summary>
-        ///
         /// <param name="directory">
         /// The DirectoryInfo object representing the directory to be removed.
         /// </param>
-        ///
         /// <param name="recurse">
         /// If true, ShouldProcess will be called for each item in the subtree.
         /// If false, ShouldProcess will only be called for the directory item.
         /// </param>
-        ///
         /// <param name="force">
         /// If true, attempts to modify the file attributes in case of a failure so that
         /// the file can be removed.
         /// </param>
-        ///
         /// <param name="rootOfRemoval">
         /// True if the DirectoryInfo being passed in is the root of the tree being removed.
         /// ShouldProcess will be called if this is true or if recurse is true.
         /// </param>
-        ///
         private void RemoveDirectoryInfoItem(DirectoryInfo directory, bool recurse, bool force, bool rootOfRemoval)
         {
             Dbg.Diagnostics.Assert(directory != null, "Caller should always check directory");
@@ -2934,41 +3027,20 @@ namespace Microsoft.PowerShell.Commands
                 continueRemoval = ShouldProcess(directory.FullName, action);
             }
 
-            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+            if (directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
             {
-                bool success = InternalSymbolicLinkLinkCodeMethods.DeleteJunction(directory.FullName);
-
-                if (!success)
+                try
+                {
+                    directory.Delete();
+                }
+                catch (Exception e)
                 {
                     string error = StringUtil.Format(FileSystemProviderStrings.CannotRemoveItem, directory.FullName);
-                    Exception e = new IOException(error);
-                    WriteError(new ErrorRecord(e, "DeleteJunctionFailed", ErrorCategory.WriteError, directory));
-                    return;
+                    Exception exception = new IOException(error, e);
+                    WriteError(new ErrorRecord(exception, "DeleteSymbolicLinkFailed", ErrorCategory.WriteError, directory));
                 }
 
-                bool isDirectory;
-                Exception accessException;
-
-                if (!Utils.NativeItemExists(directory.FullName, out isDirectory, out accessException))
-                {
-                    return;
-                }
-
-                if (accessException != null)
-                {
-                    ErrorRecord errorRecord = new ErrorRecord(accessException, "RemoveFileSystemItemUnAuthorizedAccess", ErrorCategory.PermissionDenied, directory);
-
-                    ErrorDetails errorDetails =
-                    new ErrorDetails(this, "FileSystemProviderStrings",
-                        "CannotRemoveItem",
-                        directory.FullName,
-                        accessException.Message);
-
-                    errorRecord.ErrorDetails = errorDetails;
-
-                    WriteError(errorRecord);
-                    return;
-                }
+                return;
             }
 
             if (continueRemoval)
@@ -2992,7 +3064,7 @@ namespace Microsoft.PowerShell.Commands
                 // Loop through each of the contained files and remove them.
                 IEnumerable<FileInfo> files = null;
 
-                if (!String.IsNullOrEmpty(Filter))
+                if (!string.IsNullOrEmpty(Filter))
                 {
                     files = directory.EnumerateFiles(Filter);
                 }
@@ -3031,7 +3103,7 @@ namespace Microsoft.PowerShell.Commands
 
                 if (hasChildren && !force)
                 {
-                    String error = StringUtil.Format(FileSystemProviderStrings.DirectoryNotEmpty, directory.FullName);
+                    string error = StringUtil.Format(FileSystemProviderStrings.DirectoryNotEmpty, directory.FullName);
                     Exception e = new IOException(error);
                     WriteError(new ErrorRecord(e, "DirectoryNotEmpty", ErrorCategory.WriteError, directory));
                 }
@@ -3040,22 +3112,19 @@ namespace Microsoft.PowerShell.Commands
                     // Finally, remove the directory
                     RemoveFileSystemItem(directory, force);
                 }
-            } // ShouldProcess
-        } // RemoveDirectoryInfoItem
+            }
+        }
 
         /// <summary>
         /// Removes a file from the file system.
         /// </summary>
-        ///
         /// <param name="file">
         /// The FileInfo object representing the file to be removed.
         /// </param>
-        ///
         /// <param name="force">
         /// If true, attempts to modify the file attributes in case of a failure so that
         /// the file can be removed.
         /// </param>
-        ///
         private void RemoveFileInfoItem(FileInfo file, bool force)
         {
             Dbg.Diagnostics.Assert(
@@ -3067,34 +3136,31 @@ namespace Microsoft.PowerShell.Commands
             if (ShouldProcess(file.FullName, action))
             {
                 RemoveFileSystemItem(file, force);
-            } // ShouldProcess
-        } // RemoveFileInfoItem
+            }
+        }
 
         /// <summary>
         /// Removes the file system object from the file system.
         /// </summary>
-        ///
         /// <param name="fileSystemInfo">
         /// The FileSystemInfo object representing the file or directory to be removed.
         /// </param>
-        ///
         /// <param name="force">
         /// If true, the readonly and hidden attributes will be masked off in the case of
         /// an error, and the removal will be attempted again. If false, exceptions are
         /// written to the error pipeline.
         /// </param>
-        ///
         private void RemoveFileSystemItem(FileSystemInfo fileSystemInfo, bool force)
         {
             Dbg.Diagnostics.Assert(
                 fileSystemInfo != null,
                 "Caller should always check fileSystemInfo");
 
-            //First check if we can delete this file when force is not specified.
+            // First check if we can delete this file when force is not specified.
             if (!Force &&
                 (fileSystemInfo.Attributes & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly)) != 0)
             {
-                String error = StringUtil.Format(FileSystemProviderStrings.PermissionError);
+                string error = StringUtil.Format(FileSystemProviderStrings.PermissionError);
                 Exception e = new IOException(error);
 
                 ErrorDetails errorDetails =
@@ -3203,7 +3269,7 @@ namespace Microsoft.PowerShell.Commands
                     }
                 }
             }
-        } // RemoveFileSystemItem
+        }
 
         #endregion RemoveItem
 
@@ -3212,19 +3278,15 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Determines if a file or directory exists at the specified path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the item to check.
         /// </param>
-        ///
         /// <returns>
         /// True if a file or directory exists at the specified path, false otherwise.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
-        ///
         protected override bool ItemExists(string path)
         {
             ErrorRecord error = null;
@@ -3234,36 +3296,32 @@ namespace Microsoft.PowerShell.Commands
             {
                 WriteError(error);
             }
+
             return result;
         }
 
         /// <summary>
         /// Implementation of ItemExists for the provider. This implementation
         /// allows the caller to decide if it wants to WriteError or not based
-        /// on the returned ErrorRecord
+        /// on the returned ErrorRecord.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the object to check
         /// </param>
-        ///
         /// <param name="error">
         /// An error record is returned in this parameter if there was an error.
         /// </param>
-        ///
         /// <returns>
         /// True if an object exists at the specified path, false otherwise.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
-        ///
         private bool ItemExists(string path, out ErrorRecord error)
         {
             error = null;
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -3274,19 +3332,8 @@ namespace Microsoft.PowerShell.Commands
 
             try
             {
-                bool notUsed;
-                Exception accessException;
-
-                // First see if the file exists
-                if (Utils.NativeItemExists(path, out notUsed, out accessException))
-                {
-                    result = true;
-                }
-
-                if (accessException != null)
-                {
-                    throw accessException;
-                }
+                var fsinfo = GetFileSystemInfo(path, out bool _);
+                result = fsinfo != null;
 
                 FileSystemItemProviderDynamicParameters itemExistsDynamicParameters =
                     DynamicParameters as FileSystemItemProviderDynamicParameters;
@@ -3294,12 +3341,13 @@ namespace Microsoft.PowerShell.Commands
                 // If the items see if we need to check the age of the file...
                 if (result && itemExistsDynamicParameters != null)
                 {
-                    DateTime lastWriteTime = File.GetLastWriteTime(path);
+                    DateTime lastWriteTime = fsinfo.LastWriteTime;
 
                     if (itemExistsDynamicParameters.OlderThan.HasValue)
                     {
                         result = lastWriteTime < itemExistsDynamicParameters.OlderThan.Value;
                     }
+
                     if (itemExistsDynamicParameters.NewerThan.HasValue)
                     {
                         result = lastWriteTime > itemExistsDynamicParameters.NewerThan.Value;
@@ -3328,17 +3376,15 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // Exists
+        }
 
         /// <summary>
         /// Adds -OlderThan, -NewerThan dynamic properties.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item to get the dynamic parameters for.
         /// </param>
-        ///
         /// <returns>
         /// Overrides of this method should return an object that has properties and fields decorated with
         /// parsing attributes similar to a cmdlet class or a
@@ -3352,8 +3398,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 return new FileSystemItemProviderDynamicParameters();
             }
-        } // ItemExistsDynamicParameters
-
+        }
 
         #endregion ItemExists
 
@@ -3362,16 +3407,13 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Determines if the given path is a directory, and has children.
         /// </summary>
-        ///
         /// <param name="path">
         /// The full path to the directory.
         /// </param>
-        ///
         /// <returns>
         /// True if the path refers to a directory that contains other
         /// directories or files.  False otherwise.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
@@ -3380,8 +3422,7 @@ namespace Microsoft.PowerShell.Commands
             bool result = false;
 
             // verify parameters
-
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -3405,7 +3446,6 @@ namespace Microsoft.PowerShell.Commands
                 // Since we couldn't convert the path to a DirectoryInfo
                 // the path could not be a file system container with
                 // children
-
                 result = false;
             }
             catch (ArgumentException)
@@ -3413,7 +3453,6 @@ namespace Microsoft.PowerShell.Commands
                 // Since we couldn't convert the path to a DirectoryInfo
                 // the path could not be a file system container with
                 // children
-
                 result = false;
             }
             catch (UnauthorizedAccessException)
@@ -3421,7 +3460,6 @@ namespace Microsoft.PowerShell.Commands
                 // Since we couldn't convert the path to a DirectoryInfo
                 // the path could not be a file system container with
                 // children
-
                 result = false;
             }
             catch (IOException)
@@ -3429,7 +3467,6 @@ namespace Microsoft.PowerShell.Commands
                 // Since we couldn't convert the path to a DirectoryInfo
                 // the path could not be a file system container with
                 // children
-
                 result = false;
             }
             catch (NotSupportedException)
@@ -3439,7 +3476,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // HasChildItems
+        }
 
         private static bool DirectoryInfoHasChildItems(DirectoryInfo directory)
         {
@@ -3457,7 +3494,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // DirectoryInfoHasChildItems
+        }
 
         #endregion HasChildItems
 
@@ -3466,24 +3503,19 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Copies an item at the specified path to the given destination.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the item to copy.
         /// </param>
-        ///
         /// <param name="destinationPath">
         /// The path of the destination.
         /// </param>
-        ///
         /// <param name="recurse">
         /// Specifies if the operation should also copy child items.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         ///     destination path is null or empty.
         /// </exception>
-        ///
         /// <returns>
         /// Nothing.  Copied items are written to the context's pipeline.
         /// </returns>
@@ -3492,12 +3524,12 @@ namespace Microsoft.PowerShell.Commands
             string destinationPath,
             bool recurse)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
-            if (String.IsNullOrEmpty(destinationPath))
+            if (string.IsNullOrEmpty(destinationPath))
             {
                 throw PSTraceSource.NewArgumentException("destinationPath");
             }
@@ -3527,7 +3559,7 @@ namespace Microsoft.PowerShell.Commands
             // if the source and destination path are same (for a local copy) then flag it as error.
             if ((toSession == null) && (fromSession == null) && InternalSymbolicLinkLinkCodeMethods.IsSameFileSystemItem(path, destinationPath))
             {
-                String error = StringUtil.Format(FileSystemProviderStrings.CopyError, path);
+                string error = StringUtil.Format(FileSystemProviderStrings.CopyError, path);
                 Exception e = new IOException(error);
                 e.Data[SelfCopyDataKey] = destinationPath;
                 WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, path));
@@ -3538,7 +3570,6 @@ namespace Microsoft.PowerShell.Commands
             {
                 CopyItemFromRemoteSession(path, destinationPath, recurse, Force, fromSession);
             }
-
             else
             {
                 // Copy-Item to session
@@ -3550,9 +3581,7 @@ namespace Microsoft.PowerShell.Commands
                         CopyItemLocalOrToSession(path, destinationPath, recurse, Force, ps);
                     }
                 }
-
-                // Copy-Item local
-                else
+                else // Copy-Item local
                 {
                     CopyItemLocalOrToSession(path, destinationPath, recurse, Force, null);
                 }
@@ -3560,7 +3589,7 @@ namespace Microsoft.PowerShell.Commands
 
             _excludeMatcher.Clear();
             _excludeMatcher = null;
-        } //CopyItem
+        }
 
         private void CopyItemFromRemoteSession(string path, string destinationPath, bool recurse, bool force, PSSession fromSession)
         {
@@ -3579,7 +3608,7 @@ namespace Microsoft.PowerShell.Commands
                     Hashtable op = SafeInvokeCommand.Invoke(ps, this, null);
                     if (op == null)
                     {
-                        Exception e = new IOException(String.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailedToReadFile, path));
+                        Exception e = new IOException(string.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailedToReadFile, path));
                         WriteError(new ErrorRecord(e, "CopyItemRemotelyFailedToReadFile", ErrorCategory.WriteError, path));
                         return;
                     }
@@ -3592,8 +3621,6 @@ namespace Microsoft.PowerShell.Commands
 
                     if (op["Items"] != null)
                     {
-                        bool destinationPathIsFile = Utils.NativeFileExists(destinationPath);
-
                         PSObject obj = (PSObject)op["Items"];
                         ArrayList itemsList = (ArrayList)obj.BaseObject;
                         foreach (PSObject item in itemsList)
@@ -3605,9 +3632,9 @@ namespace Microsoft.PowerShell.Commands
 
                             if (isContainer)
                             {
-                                if (destinationPathIsFile)
+                                if (File.Exists(destinationPath))
                                 {
-                                    Exception e = new IOException(String.Format(
+                                    Exception e = new IOException(string.Format(
                                         CultureInfo.InvariantCulture,
                                         FileSystemProviderStrings.CopyItemRemotelyDestinationIsFile,
                                         path,
@@ -3641,7 +3668,7 @@ namespace Microsoft.PowerShell.Commands
                     RemoveFunctionsPSCopyFileFromRemoteSession(ps);
                 }
             }
-        } // CopyItemFromRemoteSession
+        }
 
         private void CopyItemLocalOrToSession(string path, string destinationPath, bool recurse, bool Force, System.Management.Automation.PowerShell ps)
         {
@@ -3657,7 +3684,6 @@ namespace Microsoft.PowerShell.Commands
                     DirectoryInfo dir = new DirectoryInfo(path);
 
                     // Now copy the directory to the destination
-
                     CopyDirectoryInfoItem(dir, destinationPath, recurse, Force, ps);
                 }
                 else // !isContainer
@@ -3672,7 +3698,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 RemoveFunctionPSCopyFileToRemoteSession(ps);
             }
-        } // CopyItem
+        }
 
         private void CopyDirectoryInfoItem(
             DirectoryInfo directory,
@@ -3710,7 +3736,6 @@ namespace Microsoft.PowerShell.Commands
             s_tracer.WriteLine("destination = {0}", destination);
 
             // Confirm the copy with the user
-
             string action = FileSystemProviderStrings.CopyItemActionDirectory;
 
             string resource = StringUtil.Format(FileSystemProviderStrings.CopyItemResourceFileTemplate, directory.FullName, destination);
@@ -3719,7 +3744,6 @@ namespace Microsoft.PowerShell.Commands
             {
                 // Create the new directory
                 // CreateDirectory does the WriteItemObject for the new DirectoryInfo
-
                 if (ps == null)
                 {
                     CreateDirectory(destination, true);
@@ -3729,7 +3753,7 @@ namespace Microsoft.PowerShell.Commands
                     // Verify that the destination is not a file on the remote end
                     if (RemoteDestinationPathIsFile(destination, ps))
                     {
-                        Exception e = new IOException(String.Format(CultureInfo.InvariantCulture,
+                        Exception e = new IOException(string.Format(CultureInfo.InvariantCulture,
                                                                     FileSystemProviderStrings.CopyItemRemoteDestinationIsFile,
                                                                     destination));
                         WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, destination));
@@ -3746,10 +3770,9 @@ namespace Microsoft.PowerShell.Commands
                 if (recurse)
                 {
                     // Now copy all the files to that directory
-
                     IEnumerable<FileInfo> files = null;
 
-                    if (String.IsNullOrEmpty(Filter))
+                    if (string.IsNullOrEmpty(Filter))
                     {
                         files = directory.EnumerateFiles();
                     }
@@ -3771,7 +3794,6 @@ namespace Microsoft.PowerShell.Commands
                             try
                             {
                                 // CopyFileInfoItem does the WriteItemObject for the new FileInfo
-
                                 CopyFileInfoItem(file, destination, force, ps);
                             }
                             catch (ArgumentException argException)
@@ -3780,7 +3802,7 @@ namespace Microsoft.PowerShell.Commands
                             }
                             catch (IOException ioException)
                             {
-                                //IOException contains specific message about the error occured and so no need for errordetails.
+                                // IOException contains specific message about the error occured and so no need for errordetails.
                                 WriteError(new ErrorRecord(ioException, "CopyDirectoryInfoItemIOError", ErrorCategory.WriteError, file));
                             }
                             catch (UnauthorizedAccessException accessException)
@@ -3788,10 +3810,9 @@ namespace Microsoft.PowerShell.Commands
                                 WriteError(new ErrorRecord(accessException, "CopyDirectoryInfoItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, file));
                             }
                         }
-                    } // for files
+                    }
 
                     // Now copy all the directories to that directory
-
                     foreach (DirectoryInfo childDir in directory.EnumerateDirectories())
                     {
                         // Making sure to obey the StopProcessing.
@@ -3812,7 +3833,7 @@ namespace Microsoft.PowerShell.Commands
                             }
                             catch (IOException ioException)
                             {
-                                //IOException contains specific message about the error occured and so no need for errordetails.
+                                // IOException contains specific message about the error occured and so no need for errordetails.
                                 WriteError(new ErrorRecord(ioException, "CopyDirectoryInfoItemIOError", ErrorCategory.WriteError, childDir));
                             }
                             catch (UnauthorizedAccessException accessException)
@@ -3820,10 +3841,10 @@ namespace Microsoft.PowerShell.Commands
                                 WriteError(new ErrorRecord(accessException, "CopyDirectoryInfoItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, childDir));
                             }
                         }
-                    } // for directories
+                    }
                 }
-            } // ShouldProcess
-        } // CopyDirectoryInfoItem
+            }
+        }
 
         private void CopyFileInfoItem(FileInfo file, string destinationPath, bool force, System.Management.Automation.PowerShell ps)
         {
@@ -3833,7 +3854,6 @@ namespace Microsoft.PowerShell.Commands
 
             // If the destination is a container, add the file name
             // to the destination path.
-
             if (ps == null)
             {
                 if (IsItemContainer(destinationPath))
@@ -3841,10 +3861,10 @@ namespace Microsoft.PowerShell.Commands
                     destinationPath = MakePath(destinationPath, file.Name);
                 }
 
-                //if the source and destination path are same then flag it as error.
+                // if the source and destination path are same then flag it as error.
                 if (InternalSymbolicLinkLinkCodeMethods.IsSameFileSystemItem(destinationPath, file.FullName))
                 {
-                    String error = StringUtil.Format(FileSystemProviderStrings.CopyError, destinationPath);
+                    string error = StringUtil.Format(FileSystemProviderStrings.CopyError, destinationPath);
                     Exception e = new IOException(error);
                     e.Data[SelfCopyDataKey] = file.FullName;
                     WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, destinationPath));
@@ -3858,7 +3878,6 @@ namespace Microsoft.PowerShell.Commands
             }
 
             // Confirm the copy with the user
-
             string action = FileSystemProviderStrings.CopyItemActionFile;
 
             string resource = StringUtil.Format(FileSystemProviderStrings.CopyItemResourceFileTemplate, file.FullName, destinationPath);
@@ -3876,7 +3895,6 @@ namespace Microsoft.PowerShell.Commands
                             // Now copy the file
                             // We assume that if we get called we want to make
                             // the copy even if the destination already exists.
-
                             file.CopyTo(destinationPath, true);
 
                             FileInfo result = new FileInfo(destinationPath);
@@ -3898,7 +3916,6 @@ namespace Microsoft.PowerShell.Commands
                                     // If the destination exists and force is specified,
                                     // mask of the readonly and hidden attributes and
                                     // try again
-
                                     FileInfo destinationItem = new FileInfo(destinationPath);
 
                                     destinationItem.Attributes =
@@ -3921,22 +3938,24 @@ namespace Microsoft.PowerShell.Commands
                                     WriteError(new ErrorRecord(unAuthorizedAccessException, "CopyFileInfoItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, file));
                                 }
                                 else
+                                {
                                     throw;
+                                }
                             }
 
                             file.CopyTo(destinationPath, true);
 
                             FileInfo result = new FileInfo(destinationPath);
                             WriteItemObject(result, destinationPath, false);
-                        } // force
+                        }
                         else
                         {
                             WriteError(new ErrorRecord(unAuthorizedAccessException, "CopyFileInfoItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, file));
                         }
                     }
-                } // ShouldProcess
-            }// ExcludeFile
-        } // CopyFileInfoItem
+                }
+            }
+        }
 
         private void CopyDirectoryFromRemoteSession(
             string sourceDirectoryName,
@@ -3966,7 +3985,7 @@ namespace Microsoft.PowerShell.Commands
                 CreateDirectory(destination, false);
 
                 // If failed to create directory
-                if (!Utils.NativeDirectoryExists(destination))
+                if (!Directory.Exists(destination))
                 {
                     return;
                 }
@@ -3980,7 +3999,7 @@ namespace Microsoft.PowerShell.Commands
                     Hashtable op = SafeInvokeCommand.Invoke(ps, this, null);
                     if (op == null)
                     {
-                        Exception e = new IOException(String.Format(
+                        Exception e = new IOException(string.Format(
                                                       CultureInfo.InvariantCulture,
                                                       FileSystemProviderStrings.CopyItemRemotelyFailedToGetDirectoryChildItems,
                                                       sourceDirectoryFullName));
@@ -4019,7 +4038,7 @@ namespace Microsoft.PowerShell.Commands
                                                           fileSize);
                             }
                         }
-                    } // for files
+                    }
 
                     if (op["Directories"] != null)
                     {
@@ -4046,10 +4065,10 @@ namespace Microsoft.PowerShell.Commands
                                                            recurse,
                                                            ps);
                         }
-                    } // for directories
+                    }
                 }
-            } // ShouldProcess
-        } // CopyDirectoryFromRemoteSession
+            }
+        }
 
         private ArrayList GetRemoteSourceAlternateStreams(System.Management.Automation.PowerShell ps, string path)
         {
@@ -4076,7 +4095,10 @@ namespace Microsoft.PowerShell.Commands
 
         private void InitializeFunctionPSCopyFileFromRemoteSession(System.Management.Automation.PowerShell ps)
         {
-            if ((ps == null) || !ValidRemoteSessionForScripting(ps.Runspace)) { return; }
+            if ((ps == null) || !ValidRemoteSessionForScripting(ps.Runspace))
+            {
+                return;
+            }
 
             ps.AddScript(CopyFileRemoteUtils.AllCopyFromRemoteScripts);
             SafeInvokeCommand.Invoke(ps, this, null, false);
@@ -4084,7 +4106,10 @@ namespace Microsoft.PowerShell.Commands
 
         private void RemoveFunctionsPSCopyFileFromRemoteSession(System.Management.Automation.PowerShell ps)
         {
-            if ((ps == null) || !ValidRemoteSessionForScripting(ps.Runspace)) { return; }
+            if ((ps == null) || !ValidRemoteSessionForScripting(ps.Runspace))
+            {
+                return;
+            }
 
             string remoteScript = @"
                 Microsoft.PowerShell.Management\Remove-Item function:PSCopyFromSessionHelper -ea SilentlyContinue -Force
@@ -4096,7 +4121,10 @@ namespace Microsoft.PowerShell.Commands
 
         private bool ValidRemoteSessionForScripting(Runspace runspace)
         {
-            if (!(runspace is RemoteRunspace)) { return false; }
+            if (!(runspace is RemoteRunspace))
+            {
+                return false;
+            }
 
             PSLanguageMode languageMode = runspace.SessionStateProxy.LanguageMode;
             if (languageMode == PSLanguageMode.ConstrainedLanguage || languageMode == PSLanguageMode.NoLanguage)
@@ -4129,6 +4157,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     destinationFile.LastWriteTimeUtc = (DateTime)metadata["LastWriteTimeUtc"];
                 }
+
                 if (metadata["LastWriteTime"] != null)
                 {
                     destinationFile.LastWriteTime = (DateTime)metadata["LastWriteTime"];
@@ -4140,19 +4169,19 @@ namespace Microsoft.PowerShell.Commands
                     PSObject obj = (PSObject)metadata["Attributes"];
                     foreach (string value in (ArrayList)obj.BaseObject)
                     {
-                        if (String.Equals(value, "ReadOnly", StringComparison.OrdinalIgnoreCase))
+                        if (string.Equals(value, "ReadOnly", StringComparison.OrdinalIgnoreCase))
                         {
                             destinationFile.Attributes = destinationFile.Attributes | FileAttributes.ReadOnly;
                         }
-                        else if (String.Equals(value, "Hidden", StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(value, "Hidden", StringComparison.OrdinalIgnoreCase))
                         {
                             destinationFile.Attributes = destinationFile.Attributes | FileAttributes.Hidden;
                         }
-                        else if (String.Equals(value, "Archive", StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(value, "Archive", StringComparison.OrdinalIgnoreCase))
                         {
                             destinationFile.Attributes = destinationFile.Attributes | FileAttributes.Archive;
                         }
-                        else if (String.Equals(value, "System", StringComparison.OrdinalIgnoreCase))
+                        else if (string.Equals(value, "System", StringComparison.OrdinalIgnoreCase))
                         {
                             destinationFile.Attributes = destinationFile.Attributes | FileAttributes.System;
                         }
@@ -4216,18 +4245,18 @@ namespace Microsoft.PowerShell.Commands
                 {
                     SetFileMetadata(sourceFileFullName, destinationFile, ps);
                 }
-            } // ShouldProcess
+            }
         }
 
         private bool PerformCopyFileFromRemoteSession(string sourceFileFullName, FileInfo destinationFile, string destinationPath, bool force, System.Management.Automation.PowerShell ps,
                                                       long fileSize, bool isAlternateDataStream, string streamName)
         {
             bool success = false;
-            string activity = String.Format(CultureInfo.InvariantCulture,
+            string activity = string.Format(CultureInfo.InvariantCulture,
                                             FileSystemProviderStrings.CopyItemRemotelyProgressActivity,
                                             sourceFileFullName,
                                             destinationFile.FullName);
-            string statusDescription = String.Format(CultureInfo.InvariantCulture,
+            string statusDescription = string.Format(CultureInfo.InvariantCulture,
                                                         FileSystemProviderStrings.CopyItemRemotelyStatusDescription,
                                                         ps.Runspace.ConnectionInfo.ComputerName,
                                                         "localhost");
@@ -4249,6 +4278,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         destinationFile.Attributes = destinationFile.Attributes & ~(FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System);
                     }
+
                     wStream = new FileStream(destinationFile.FullName, FileMode.Create);
                 }
 
@@ -4288,7 +4318,7 @@ namespace Microsoft.PowerShell.Commands
                     if (op == null)
                     {
                         errorWhileCopyRemoteFile = true;
-                        Exception e = new IOException(String.Format(CultureInfo.InvariantCulture,
+                        Exception e = new IOException(string.Format(CultureInfo.InvariantCulture,
                                                                     FileSystemProviderStrings.CopyItemRemotelyFailedToReadFile,
                                                                     sourceFileFullName));
                         WriteError(new ErrorRecord(e, "FailedToCopyFileFromRemoteSession", ErrorCategory.WriteError, sourceFileFullName));
@@ -4307,11 +4337,12 @@ namespace Microsoft.PowerShell.Commands
                     }
 
                     // To accomodate empty files
-                    String content = "";
+                    string content = string.Empty;
                     if (op["b64Fragment"] != null)
                     {
-                        content = (String)op["b64Fragment"];
+                        content = (string)op["b64Fragment"];
                     }
+
                     bool more = (bool)op["moreAvailable"];
                     currentIndex += fragmentSize;
                     byte[] bytes = System.Convert.FromBase64String(content);
@@ -4375,6 +4406,7 @@ namespace Microsoft.PowerShell.Commands
                     }
                 }
             }
+
             return success;
         }
 
@@ -4401,7 +4433,6 @@ namespace Microsoft.PowerShell.Commands
         // If the target supports alternate data streams the following must be true:
         // 1) The remote session must be PowerShell V3 or higher to support Streams
         // 2) The target drive must be NTFS
-        //
         private bool RemoteTargetSupportsAlternateStreams(System.Management.Automation.PowerShell ps, string path)
         {
             bool supportsAlternateStreams = false;
@@ -4440,10 +4471,12 @@ namespace Microsoft.PowerShell.Commands
                 {
                     isDirectoryInfo = (bool)op["IsDirectoryInfo"];
                 }
+
                 if (op["IsFileInfo"] != null)
                 {
                     isFileInfo = (bool)op["IsFileInfo"];
                 }
+
                 if (op["ParentIsDirectoryInfo"] != null)
                 {
                     parentIsDirectoryInfo = (bool)op["ParentIsDirectoryInfo"];
@@ -4492,11 +4525,11 @@ namespace Microsoft.PowerShell.Commands
 
         private bool CopyFileStreamToRemoteSession(FileInfo file, string destinationPath, System.Management.Automation.PowerShell ps, bool isAlternateStream, string streamName)
         {
-            string activity = String.Format(CultureInfo.InvariantCulture,
+            string activity = string.Format(CultureInfo.InvariantCulture,
                                             FileSystemProviderStrings.CopyItemRemotelyProgressActivity,
                                             file.FullName,
                                             destinationPath);
-            string statusDescription = String.Format(CultureInfo.InvariantCulture,
+            string statusDescription = string.Format(CultureInfo.InvariantCulture,
                                                      FileSystemProviderStrings.CopyItemRemotelyStatusDescription,
                                                      "localhost",
                                                      ps.Runspace.ConnectionInfo.ComputerName);
@@ -4526,7 +4559,7 @@ namespace Microsoft.PowerShell.Commands
                     fStream = AlternateDataStreamUtilities.CreateFileStream(file.FullName, streamName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 }
 #endif
-                long remainingFileSize = fStream.Length;
+                long remainingFileSize = fStream != null ? fStream.Length : 0;
                 do
                 {
                     if (Stopping)
@@ -4540,6 +4573,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         toRead = (int)remainingFileSize;
                     }
+
                     if (fragment == null)
                     {
                         fragment = new byte[toRead];
@@ -4554,6 +4588,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         readSoFar += fStream.Read(fragment, 0, toRead);
                     }
+
                     remainingFileSize -= readSoFar;
 
                     string b64Fragment = System.Convert.ToBase64String(fragment);
@@ -4594,15 +4629,15 @@ namespace Microsoft.PowerShell.Commands
                     Hashtable op = SafeInvokeCommand.Invoke(ps, this, null);
                     if (op == null || op["BytesWritten"] == null)
                     {
-                        //write error to stream
-                        Exception e = new IOException(String.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailed, file));
+                        // write error to stream
+                        Exception e = new IOException(string.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailed, file));
                         WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, file.FullName));
                         return false;
                     }
 
                     if ((int)(op["BytesWritten"]) != toRead)
                     {
-                        Exception e = new IOException(String.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailed, file));
+                        Exception e = new IOException(string.Format(CultureInfo.InvariantCulture, FileSystemProviderStrings.CopyItemRemotelyFailed, file));
                         WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, file.FullName));
                         return false;
                     }
@@ -4643,6 +4678,7 @@ namespace Microsoft.PowerShell.Commands
                     fStream.Dispose();
                 }
             }
+
             return success;
         }
 
@@ -4679,9 +4715,9 @@ namespace Microsoft.PowerShell.Commands
             // Make the remote path
             var remoteFilePath = MakeRemotePath(ps, destinationPath, file.Name);
 
-            if (String.IsNullOrEmpty(remoteFilePath))
+            if (string.IsNullOrEmpty(remoteFilePath))
             {
-                Exception e = new ArgumentException(String.Format(CultureInfo.InvariantCulture, SessionStateStrings.PathNotFound, destinationPath));
+                Exception e = new ArgumentException(string.Format(CultureInfo.InvariantCulture, SessionStateStrings.PathNotFound, destinationPath));
                 WriteError(new ErrorRecord(e, "RemotePathNotFound", ErrorCategory.WriteError, destinationPath));
                 return false;
             }
@@ -4696,7 +4732,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 foreach (AlternateStreamData stream in AlternateDataStreamUtilities.GetStreams(file.FullName))
                 {
-                    if (!(String.Equals(":$DATA", stream.Stream, StringComparison.OrdinalIgnoreCase)))
+                    if (!(string.Equals(":$DATA", stream.Stream, StringComparison.OrdinalIgnoreCase)))
                     {
                         result = CopyFileStreamToRemoteSession(file, remoteFilePath, ps, true, stream.Stream);
                         if (!result)
@@ -4713,7 +4749,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // PerformCopyFileToRemoteSession
+        }
 
         private bool RemoteDestinationPathIsFile(string destination, System.Management.Automation.PowerShell ps)
         {
@@ -4724,7 +4760,7 @@ namespace Microsoft.PowerShell.Commands
 
             if (op == null || op["IsFileInfo"] == null)
             {
-                Exception e = new IOException(String.Format(
+                Exception e = new IOException(string.Format(
                                                     CultureInfo.InvariantCulture,
                                                     FileSystemProviderStrings.CopyItemRemotelyFailedToValidateIfDestinationIsFile,
                                                     destination));
@@ -4756,13 +4792,14 @@ namespace Microsoft.PowerShell.Commands
 
             if (force && (op["DirectoryPath"] == null))
             {
-                Exception e = new IOException(String.Format(CultureInfo.InvariantCulture,
+                Exception e = new IOException(string.Format(CultureInfo.InvariantCulture,
                                                             FileSystemProviderStrings.CopyItemRemotelyFailedToCreateDirectory,
                                                             destination));
                 WriteError(new ErrorRecord(e, "FailedToCreateDirectory", ErrorCategory.WriteError, destination));
                 return null;
             }
-            string path = (String)(op["DirectoryPath"]);
+
+            string path = (string)(op["DirectoryPath"]);
 
             if ((!force) && (bool)op["PathExists"])
             {
@@ -4772,7 +4809,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return path;
-        } // CreateDirectoryOnRemoteSession
+        }
 
         // Returns true if the destination path represents a device name, and write an error to the user.
         private bool PathIsReservedDeviceName(string destinationPath, string errorId)
@@ -4781,7 +4818,7 @@ namespace Microsoft.PowerShell.Commands
             if (Utils.IsReservedDeviceName(destinationPath))
             {
                 pathIsReservedDeviceName = true;
-                String error = StringUtil.Format(FileSystemProviderStrings.TargetCannotContainDeviceName, destinationPath);
+                string error = StringUtil.Format(FileSystemProviderStrings.TargetCannotContainDeviceName, destinationPath);
                 Exception e = new IOException(error);
                 WriteError(new ErrorRecord(e, errorId, ErrorCategory.WriteError, destinationPath));
             }
@@ -4798,22 +4835,19 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Gets the parent of the given path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of which to get the parent.
         /// </param>
-        ///
         /// <param name="root">
         /// The root of the drive.
         /// </param>
-        ///
         /// <returns>
         /// The parent of the given path.
         /// </returns>
         protected override string GetParentPath(string path, string root)
         {
             string parentPath = base.GetParentPath(path, root);
-            if (!IsUNCPath(path))
+            if (!Utils.PathIsUnc(path))
             {
                 parentPath = EnsureDriveIsRooted(parentPath);
             }
@@ -4825,7 +4859,7 @@ namespace Microsoft.PowerShell.Commands
             }
 #endif
             return parentPath;
-        } // GetParentPath
+        }
 
         // Note: we don't use IO.Path.IsPathRooted as this deals with "invalid" i.e. unnormalized paths
         private static bool IsAbsolutePath(string path)
@@ -4849,34 +4883,25 @@ namespace Microsoft.PowerShell.Commands
             return result;
         }
 
-
-        private static bool IsUNCPath(string path)
-        {
-            return path.StartsWith("\\\\", StringComparison.Ordinal);
-        }
-
         /// <summary>
         /// Determines if the specified path is a root of a UNC share
         /// by counting the path separators "\" following "\\". If only
         /// one path separator is found we know the path is in the form
         /// "\\server\share" and is a valid UNC root.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to check to see if its a UNC root.
         /// </param>
-        ///
         /// <returns>
         /// True if the path is a UNC root, or false otherwise.
         /// </returns>
-        ///
         private static bool IsUNCRoot(string path)
         {
             bool result = false;
 
-            if (!String.IsNullOrEmpty(path))
+            if (!string.IsNullOrEmpty(path))
             {
-                if (IsUNCPath(path))
+                if (Utils.PathIsUnc(path))
                 {
                     int lastIndex = path.Length - 1;
 
@@ -4893,11 +4918,13 @@ namespace Microsoft.PowerShell.Commands
                         {
                             break;
                         }
+
                         --lastIndex;
                         if (lastIndex < 3)
                         {
                             break;
                         }
+
                         ++separatorsFound;
                     } while (lastIndex > 3);
 
@@ -4907,29 +4934,27 @@ namespace Microsoft.PowerShell.Commands
                     }
                 }
             }
+
             return result;
         }
 
         /// <summary>
-        /// Determines if the specified path is either a drive root or a UNC root
+        /// Determines if the specified path is either a drive root or a UNC root.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path
         /// </param>
-        ///
         /// <returns>
         /// True if the path is either a drive root or a UNC root, or false otherwise.
         /// </returns>
-        ///
         private static bool IsPathRoot(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 return false;
             }
 
-            bool isDriveRoot = String.Equals(path, Path.GetPathRoot(path), StringComparison.OrdinalIgnoreCase);
+            bool isDriveRoot = string.Equals(path, Path.GetPathRoot(path), StringComparison.OrdinalIgnoreCase);
             bool isUNCRoot = IsUNCRoot(path);
             bool result = isDriveRoot || isUNCRoot;
             s_tracer.WriteLine("result = {0}; isDriveRoot = {1}; isUNCRoot = {2}", result, isDriveRoot, isUNCRoot);
@@ -4940,20 +4965,16 @@ namespace Microsoft.PowerShell.Commands
         /// Normalizes the path that was passed in and returns it as a normalized
         /// path relative to the given basePath.
         /// </summary>
-        ///
         /// <param name="path">
         /// A fully qualifiedpath to an item. The item must exist,
         /// or the provider writes out an error.
         /// </param>
-        ///
         /// <param name="basePath">
         /// The path that the normalized path should be relative to.
         /// </param>
-        ///
         /// <returns>
         /// A normalized path, relative to the given basePath.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
@@ -4961,15 +4982,14 @@ namespace Microsoft.PowerShell.Commands
             string path,
             string basePath)
         {
-            if (String.IsNullOrEmpty(path) || !IsValidPath(path))
+            if (string.IsNullOrEmpty(path) || !IsValidPath(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
-
             if (basePath == null)
             {
-                basePath = String.Empty;
+                basePath = string.Empty;
             }
 
             s_tracer.WriteLine("basePath = {0}", basePath);
@@ -4988,7 +5008,7 @@ namespace Microsoft.PowerShell.Commands
                 basePath = EnsureDriveIsRooted(basePath);
 
                 result = path;
-                if (String.IsNullOrEmpty(result))
+                if (string.IsNullOrEmpty(result))
                 {
                     break;
                 }
@@ -4996,21 +5016,20 @@ namespace Microsoft.PowerShell.Commands
                 try
                 {
                     string originalPathComparison = path;
-                    if (!originalPathComparison.EndsWith("" + StringLiterals.DefaultPathSeparator, StringComparison.OrdinalIgnoreCase))
+                    if (!originalPathComparison.EndsWith(StringLiterals.DefaultPathSeparator))
                     {
                         originalPathComparison += StringLiterals.DefaultPathSeparator;
                     }
 
                     string basePathComparison = basePath;
-                    if (!basePathComparison.EndsWith("" + StringLiterals.DefaultPathSeparator, StringComparison.OrdinalIgnoreCase))
+                    if (!basePathComparison.EndsWith(StringLiterals.DefaultPathSeparator))
                     {
                         basePathComparison += StringLiterals.DefaultPathSeparator;
                     }
 
                     if (originalPathComparison.StartsWith(basePathComparison, StringComparison.OrdinalIgnoreCase))
                     {
-                        bool isUNCPath = IsUNCPath(result);
-                        if (!isUNCPath)
+                        if (!Utils.PathIsUnc(result))
                         {
                             // Add the base path back on so that it can be used for
                             // processing
@@ -5028,22 +5047,21 @@ namespace Microsoft.PowerShell.Commands
                         {
                             // Now ensure that we have the proper casing by
                             // getting the names of the files and directories that match
+                            string directoryPath = GetParentPath(result, string.Empty);
 
-                            string directoryPath = GetParentPath(result, String.Empty);
-
-                            if (String.IsNullOrEmpty(directoryPath))
+                            if (string.IsNullOrEmpty(directoryPath))
                             {
-                                return String.Empty;
+                                return string.Empty;
                             }
 
 #if UNIX
-                            // We don't use the Directory class for Unix because the path
+                            // We don't use the Directory.EnumerateFiles() for Unix because the path
                             // may contain additional globbing patterns such as '[ab]'
                             // which Directory.EnumerateFiles() processes, giving undesireable
                             // results in this context.
-                            if (!Utils.NativeItemExists(result))
+                            if (!File.Exists(result) && !Directory.Exists(result))
                             {
-                                String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                                string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                                 Exception e = new IOException(error);
                                 WriteError(new ErrorRecord(
                                     e,
@@ -5057,7 +5075,6 @@ namespace Microsoft.PowerShell.Commands
 
                             // Use the Directory class to get the real path (this will
                             // ensure the proper casing
-
                             IEnumerable<string> files = Directory.EnumerateFiles(directoryPath, leafName);
 
                             if (files == null || !files.Any())
@@ -5067,7 +5084,7 @@ namespace Microsoft.PowerShell.Commands
 
                             if (files == null || !files.Any())
                             {
-                                String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                                string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                                 Exception e = new IOException(error);
                                 WriteError(new ErrorRecord(
                                     e,
@@ -5086,7 +5103,7 @@ namespace Microsoft.PowerShell.Commands
                             }
                             else
                             {
-                                String error = StringUtil.Format(FileSystemProviderStrings.PathOutSideBasePath, path);
+                                string error = StringUtil.Format(FileSystemProviderStrings.PathOutSideBasePath, path);
                                 Exception e =
                                     new ArgumentException(error);
                                 WriteError(new ErrorRecord(
@@ -5111,7 +5128,7 @@ namespace Microsoft.PowerShell.Commands
                 }
                 catch (IOException ioError)
                 {
-                    //IOException contains specific message about the error occured and so no need for errordetails.
+                    // IOException contains specific message about the error occured and so no need for errordetails.
                     WriteError(new ErrorRecord(ioError, "NormalizeRelativePathIOError", ErrorCategory.ReadError, path));
                     break;
                 }
@@ -5123,28 +5140,24 @@ namespace Microsoft.PowerShell.Commands
             } while (false);
 
             return result;
-        } // NormalizeRelativePath
+        }
 
         /// <summary>
         /// Normalizes the path that was passed in and returns the normalized path
         /// as a relative path to the basePath that was passed.
         /// </summary>
-        ///
         /// <param name="path">
         /// A fully qualified provider specific path to an item. The item should exist
         /// or the provider should write out an error.
         /// </param>
-        ///
         /// <param name="basePath">
         /// The path that the return value should be relative to.
         /// </param>
-        ///
         /// <returns>
         /// A normalized path that is relative to the basePath that was passed. The
         /// provider should parse the path parameter, normalize the path, and then
         /// return the normalized path relative to the basePath.
         /// </returns>
-        ///
         /// <remarks>
         /// This method does not have to be purely syntactical parsing of the path. It
         /// is encouraged that the provider actually use the path to lookup in its store
@@ -5154,7 +5167,6 @@ namespace Microsoft.PowerShell.Commands
         /// to normalize the path and then make it relative to basePath. All string comparisons
         /// are done using StringComparison.InvariantCultureIgnoreCase.
         /// </remarks>
-        ///
         private string NormalizeRelativePathHelper(string path, string basePath)
         {
             if (path == null)
@@ -5164,12 +5176,12 @@ namespace Microsoft.PowerShell.Commands
 
             if (path.Length == 0)
             {
-                return String.Empty;
+                return string.Empty;
             }
 
             if (basePath == null)
             {
-                basePath = String.Empty;
+                basePath = string.Empty;
             }
 
             s_tracer.WriteLine("basePath = {0}", basePath);
@@ -5177,13 +5189,13 @@ namespace Microsoft.PowerShell.Commands
 #if !UNIX
             // Remove alternate data stream references
             // See if they've used the inline stream syntax. They have more than one colon.
-            string alternateDataStream = String.Empty;
+            string alternateDataStream = string.Empty;
             int firstColon = path.IndexOf(':');
             int secondColon = path.IndexOf(':', firstColon + 1);
             if (secondColon > 0)
             {
                 string newPath = path.Substring(0, secondColon);
-                alternateDataStream = path.Replace(newPath, "");
+                alternateDataStream = path.Replace(newPath, string.Empty);
                 path = newPath;
             }
 #endif
@@ -5204,8 +5216,8 @@ namespace Microsoft.PowerShell.Commands
 
                 // See if the base and the path are already the same. We resolve this to
                 // ..\Leaf, since resolving "." to "." doesn't offer much information.
-                if (String.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) &&
-                    (!originalPath.EndsWith("" + StringLiterals.DefaultPathSeparator, StringComparison.OrdinalIgnoreCase)))
+                if (string.Equals(path, basePath, StringComparison.OrdinalIgnoreCase) &&
+                    (!originalPath.EndsWith(StringLiterals.DefaultPathSeparator)))
                 {
                     string childName = GetChildName(path);
                     result = MakePath("..", childName);
@@ -5221,16 +5233,16 @@ namespace Microsoft.PowerShell.Commands
                 if ((
                     !(path + StringLiterals.DefaultPathSeparator).StartsWith(
                     basePath + StringLiterals.DefaultPathSeparator, StringComparison.OrdinalIgnoreCase)) &&
-                    (!String.IsNullOrEmpty(basePath))
+                    (!string.IsNullOrEmpty(basePath))
                     )
                 {
-                    result = String.Empty;
+                    result = string.Empty;
                     string commonBase = GetCommonBase(path, basePath);
 
                     Stack<string> parentNavigationStack = TokenizePathToStack(basePath, commonBase);
                     int parentPopCount = parentNavigationStack.Count;
 
-                    if (String.IsNullOrEmpty(commonBase))
+                    if (string.IsNullOrEmpty(commonBase))
                     {
                         parentPopCount--;
                     }
@@ -5249,10 +5261,10 @@ namespace Microsoft.PowerShell.Commands
                     // ..\..\dir*
                     // In that case (as above,) we keep the ..\..\directory1
                     // instead of ".." as would usually be returned
-                    if (!String.IsNullOrEmpty(commonBase))
+                    if (!string.IsNullOrEmpty(commonBase))
                     {
-                        if (String.Equals(path, commonBase, StringComparison.OrdinalIgnoreCase) &&
-                            (!path.EndsWith("" + StringLiterals.DefaultPathSeparator, StringComparison.OrdinalIgnoreCase)))
+                        if (string.Equals(path, commonBase, StringComparison.OrdinalIgnoreCase) &&
+                            (!path.EndsWith(StringLiterals.DefaultPathSeparator)))
                         {
                             string childName = GetChildName(path);
                             result = MakePath("..", result);
@@ -5276,14 +5288,14 @@ namespace Microsoft.PowerShell.Commands
                     // on the value of basePath.
                     if (IsPathRoot(path))
                     {
-                        if (String.IsNullOrEmpty(basePath))
+                        if (string.IsNullOrEmpty(basePath))
                         {
                             result = path;
                             break;
                         }
                         else
                         {
-                            result = String.Empty;
+                            result = string.Empty;
                             break;
                         }
                     }
@@ -5311,31 +5323,31 @@ namespace Microsoft.PowerShell.Commands
             } while (false);
 
 #if !UNIX
-            if (!String.IsNullOrEmpty(alternateDataStream))
+            if (!string.IsNullOrEmpty(alternateDataStream))
             {
                 result = result + alternateDataStream;
             }
 #endif
 
             return result;
-        } // NormalizeRelativePathHelper
+        }
 
         private string RemoveRelativeTokens(string path)
         {
             string testPath = path.Replace('/', '\\');
             if (
-                (testPath.IndexOf("\\", StringComparison.OrdinalIgnoreCase) < 0) ||
-                testPath.StartsWith(".\\", StringComparison.OrdinalIgnoreCase) ||
-                testPath.StartsWith("..\\", StringComparison.OrdinalIgnoreCase) ||
-                testPath.EndsWith("\\.", StringComparison.OrdinalIgnoreCase) ||
-                testPath.EndsWith("\\..", StringComparison.OrdinalIgnoreCase) ||
-                (testPath.IndexOf("\\.\\", StringComparison.OrdinalIgnoreCase) > 0) ||
-                (testPath.IndexOf("\\..\\", StringComparison.OrdinalIgnoreCase) > 0))
+                !testPath.Contains('\\') ||
+                testPath.StartsWith(".\\", StringComparison.Ordinal) ||
+                testPath.StartsWith("..\\", StringComparison.Ordinal) ||
+                testPath.EndsWith("\\.", StringComparison.Ordinal) ||
+                testPath.EndsWith("\\..", StringComparison.Ordinal) ||
+                testPath.Contains("\\.\\", StringComparison.Ordinal) ||
+                testPath.Contains("\\..\\", StringComparison.Ordinal))
             {
                 try
                 {
-                    Stack<string> tokenizedPathStack = TokenizePathToStack(path, "");
-                    Stack<string> normalizedPath = NormalizeThePath("", tokenizedPathStack);
+                    Stack<string> tokenizedPathStack = TokenizePathToStack(path, string.Empty);
+                    Stack<string> normalizedPath = NormalizeThePath(string.Empty, tokenizedPathStack);
                     return CreateNormalizedRelativePathFromStack(normalizedPath);
                 }
                 catch (UnauthorizedAccessException)
@@ -5348,17 +5360,16 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Get the common base path of two paths
+        /// Get the common base path of two paths.
         /// </summary>
-        /// <param name="path1">One path</param>
-        /// <param name="path2">Another path</param>
+        /// <param name="path1">One path.</param>
+        /// <param name="path2">Another path.</param>
         private string GetCommonBase(string path1, string path2)
         {
             // Always see if the shorter path is a substring of the
             // longer path. If it is not, take the child off of the longer
             // path and compare again.
-
-            while (!String.Equals(path1, path2, StringComparison.OrdinalIgnoreCase))
+            while (!string.Equals(path1, path2, StringComparison.OrdinalIgnoreCase))
             {
                 if (path2.Length > path1.Length)
                 {
@@ -5374,22 +5385,18 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Tokenizes the specified path onto a stack
+        /// Tokenizes the specified path onto a stack.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to tokenize.
         /// </param>
-        ///
         /// <param name="basePath">
         /// The base part of the path that should not be tokenized.
         /// </param>
-        ///
         /// <returns>
         /// A stack containing the tokenized path with leaf elements on the bottom
         /// of the stack and the most ancestral parent at the top.
         /// </returns>
-        ///
         private Stack<string> TokenizePathToStack(string path, string basePath)
         {
             Stack<string> tokenizedPathStack = new Stack<string>();
@@ -5401,9 +5408,8 @@ namespace Microsoft.PowerShell.Commands
             {
                 // Get the child name and push it onto the stack
                 // if its valid
-
                 string childName = GetChildName(tempPath);
-                if (String.IsNullOrEmpty(childName))
+                if (string.IsNullOrEmpty(childName))
                 {
                     // Push the parent on and then stop
                     s_tracer.WriteLine("tokenizedPathStack.Push({0})", tempPath);
@@ -5421,47 +5427,44 @@ namespace Microsoft.PowerShell.Commands
                 // - a UNC path that is the root of a UNC share
                 // - not a UNC path and the string length is less than or
                 //   equal to 3. "C:\"
-
                 tempPath = GetParentPath(tempPath, basePath);
                 if (tempPath.Length >= previousParent.Length ||
                     IsPathRoot(tempPath))
                 {
-                    if (String.IsNullOrEmpty(basePath))
+                    if (string.IsNullOrEmpty(basePath))
                     {
                         s_tracer.WriteLine("tokenizedPathStack.Push({0})", tempPath);
                         tokenizedPathStack.Push(tempPath);
                     }
+
                     break;
                 }
+
                 previousParent = tempPath;
             }
 
             return tokenizedPathStack;
-        } // TokenizePathToStack
+        }
 
         /// <summary>
         /// Given the tokenized path, the relative path elements are removed.
         /// </summary>
-        ///
         /// <param name="basepath">
         ///   String containing basepath for which we are trying to find the relative path.
         /// </param>
-        ///
         /// <param name="tokenizedPathStack">
         /// A stack containing path elements where the leaf most element is at
         /// the bottom of the stack and the most ancestral parent is on the top.
         /// Generally this stack comes from TokenizePathToStack().
         /// </param>
-        ///
         /// <returns>
         /// A stack in reverse order with the path elements normalized and all relative
         /// path tokens removed.
         /// </returns>
-        ///
         private Stack<string> NormalizeThePath(string basepath, Stack<string> tokenizedPathStack)
         {
             Stack<string> normalizedPathStack = new Stack<string>();
-            String currentPath = basepath;
+            string currentPath = basepath;
 
             while (tokenizedPathStack.Count > 0)
             {
@@ -5481,14 +5484,14 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // Pop the result and continue processing
                         string poppedName = normalizedPathStack.Pop();
-                        //update our currentpath to reflect the change.
+                        // update our currentpath to reflect the change.
                         if (currentPath.Length > poppedName.Length)
                         {
                             currentPath = currentPath.Substring(0, currentPath.Length - poppedName.Length - 1);
                         }
                         else
                         {
-                            currentPath = "";
+                            currentPath = string.Empty;
                         }
 
                         s_tracer.WriteLine("normalizedPathStack.Pop() : {0}", poppedName);
@@ -5503,8 +5506,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     currentPath = MakePath(currentPath, childName);
 
-                    Boolean isContainer = false;
-                    FileSystemInfo fsinfo = GetFileSystemInfo(currentPath, ref isContainer);
+                    var fsinfo = GetFileSystemInfo(currentPath, out bool _);
 
                     // Clean up the child name to proper casing and short-path
                     // expansion if required. Also verify that .NET hasn't over-normalized
@@ -5527,45 +5529,41 @@ namespace Microsoft.PowerShell.Commands
                     else
                     {
                         // We couldn't find the item
-                        if ((!isContainer) &&
-                           (tokenizedPathStack.Count == 0))
+                        if (tokenizedPathStack.Count == 0)
                         {
                             throw PSTraceSource.NewArgumentException("path", FileSystemProviderStrings.ItemDoesNotExist, currentPath);
                         }
                     }
                 }
+
                 s_tracer.WriteLine("normalizedPathStack.Push({0})", childName);
                 normalizedPathStack.Push(childName);
             }
 
             return normalizedPathStack;
-        } // NormalizeThePath
+        }
 
         /// <summary>
-        /// Pops each leaf element of the stack and uses MakePath to generate the relative path
+        /// Pops each leaf element of the stack and uses MakePath to generate the relative path.
         /// </summary>
-        ///
         /// <param name="normalizedPathStack">
         /// The stack containing the leaf elements of the path.
         /// </param>
-        ///
         /// <returns>
         /// A path that is made up of the leaf elements on the given stack.
         /// </returns>
-        ///
         /// <remarks>
         /// The elements on the stack start from the leaf element followed by its parent
         /// followed by its parent, etc. Each following element on the stack is the parent
         /// of the one before it.
         /// </remarks>
-        ///
         private string CreateNormalizedRelativePathFromStack(Stack<string> normalizedPathStack)
         {
-            string leafElement = String.Empty;
+            string leafElement = string.Empty;
 
             while (normalizedPathStack.Count > 0)
             {
-                if (String.IsNullOrEmpty(leafElement))
+                if (string.IsNullOrEmpty(leafElement))
                 {
                     leafElement = normalizedPathStack.Pop();
                 }
@@ -5575,22 +5573,19 @@ namespace Microsoft.PowerShell.Commands
                     leafElement = MakePath(parentElement, leafElement);
                 }
             }
-            return leafElement;
-        } // CreateNormalizedRelativePathFromStack
 
+            return leafElement;
+        }
 
         /// <summary>
         /// Gets the name of the leaf element of the specified path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The fully qualified path to the item.
         /// </param>
-        ///
         /// <returns>
         /// The leaf element of the specified path.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
@@ -5598,17 +5593,15 @@ namespace Microsoft.PowerShell.Commands
         {
             // Verify the parameters
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
             // Normalize the path
-
             path = path.Replace(StringLiterals.AlternatePathSeparator, StringLiterals.DefaultPathSeparator);
 
             // Trim trailing back slashes
-
             path = path.TrimEnd(StringLiterals.DefaultPathSeparator);
 
             string result = null;
@@ -5618,7 +5611,6 @@ namespace Microsoft.PowerShell.Commands
             if (separatorIndex == -1)
             {
                 // Since there was no path separator return an empty string
-
                 result = EnsureDriveIsRooted(path);
             }
             else
@@ -5627,21 +5619,19 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // GetChildName
+        }
 
         private static string EnsureDriveIsRooted(string path)
         {
             string result = path;
 
             // Find the drive separator
-
             int index = path.IndexOf(':');
 
             if (index != -1)
             {
                 // if the drive separator is the end of the path, add
                 // the root path separator back
-
                 if (index + 1 == path.Length)
                 {
                     result = path + StringLiterals.DefaultPathSeparator;
@@ -5649,34 +5639,31 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return result;
-        } // EnsureDriveIsRooted
+        }
 
         /// <summary>
         /// Determines if the item at the specified path is a directory.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to the file or directory to check.
         /// </param>
-        ///
         /// <returns>
         /// True if the item at the specified path is a directory.
         /// False otherwise.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         protected override bool IsItemContainer(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
             path = NormalizePath(path);
 
-            return Utils.NativeDirectoryExists(path);
+            return Directory.Exists(path);
         }
 
         #region MoveItem
@@ -5684,19 +5671,15 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Moves an item at the specified path to the given destination.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the item to move.
         /// </param>
-        ///
         /// <param name="destination">
         /// The path of the destination.
         /// </param>
-        ///
         /// <returns>
         /// Nothing.  Moved items are written to the context's pipeline.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         ///     destination is null or empty.
@@ -5707,12 +5690,12 @@ namespace Microsoft.PowerShell.Commands
         {
             // Check the parameters
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
-            if (String.IsNullOrEmpty(destination))
+            if (string.IsNullOrEmpty(destination))
             {
                 throw PSTraceSource.NewArgumentException("destination");
             }
@@ -5734,7 +5717,6 @@ namespace Microsoft.PowerShell.Commands
                 if (isContainer)
                 {
                     // Get the DirectoryInfo
-
                     DirectoryInfo dir = new DirectoryInfo(path);
 
                     if (ItemExists(destination) &&
@@ -5743,25 +5725,21 @@ namespace Microsoft.PowerShell.Commands
                         destination = MakePath(destination, dir.Name);
                     }
 
-
                     // Get the confirmation text
                     string action = FileSystemProviderStrings.MoveItemActionDirectory;
 
                     string resource = StringUtil.Format(FileSystemProviderStrings.MoveItemResourceFileTemplate, dir.FullName, destination);
 
-
                     // Confirm the move with the user
                     if (ShouldProcess(resource, action))
                     {
                         // Now move the directory
-
                         MoveDirectoryInfoItem(dir, destination, Force);
                     }
                 }
                 else
                 {
                     // Get the FileInfo
-
                     FileInfo file = new FileInfo(path);
 
                     Dbg.Diagnostics.Assert(
@@ -5773,19 +5751,15 @@ namespace Microsoft.PowerShell.Commands
                     {
                         // Construct the new file path from the destination
                         // directory and the file name
-
                         destination = MakePath(destination, file.Name);
                     }
 
                     // Get the confirmation text
-
                     string action = FileSystemProviderStrings.MoveItemActionFile;
 
                     string resource = StringUtil.Format(FileSystemProviderStrings.MoveItemResourceFileTemplate, file.FullName, destination);
 
-
                     // Confirm the move with the user
-
                     if (ShouldProcess(resource, action))
                     {
                         MoveFileInfoItem(file, destination, Force, true);
@@ -5798,14 +5772,14 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "MoveItemIOError", ErrorCategory.WriteError, path));
             }
             catch (UnauthorizedAccessException accessException)
             {
                 WriteError(new ErrorRecord(accessException, "MoveItemUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
             }
-        } // MoveItem
+        }
 
         private void MoveFileInfoItem(
             FileInfo file,
@@ -5818,7 +5792,7 @@ namespace Microsoft.PowerShell.Commands
                 "The caller should verify file.");
 
             Dbg.Diagnostics.Assert(
-                !String.IsNullOrEmpty(destination),
+                !string.IsNullOrEmpty(destination),
                 "THe caller should verify destination.");
 
             try
@@ -5837,13 +5811,11 @@ namespace Microsoft.PowerShell.Commands
             catch (System.UnauthorizedAccessException unauthorizedAccess)
             {
                 // This error is thrown when the readonly bit is set.
-
                 if (force)
                 {
                     try
                     {
                         // mask off the readonly and hidden bits and try again
-
                         file.Attributes =
                             file.Attributes & ~(FileAttributes.ReadOnly | FileAttributes.Hidden);
 
@@ -5884,7 +5856,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //check if destination file exists. if force is specified then we should delete the destination before moving
+                // check if destination file exists. if force is specified then we should delete the destination before moving
                 if (force && File.Exists(destination))
                 {
                     FileInfo destfile = new FileInfo(destination);
@@ -5892,7 +5864,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         try
                         {
-                            //Make sure the file is not read only
+                            // Make sure the file is not read only
                             destfile.Attributes = destfile.Attributes & ~(FileAttributes.ReadOnly | FileAttributes.Hidden);
                             destfile.Delete();
                             file.MoveTo(destination);
@@ -5914,7 +5886,7 @@ namespace Microsoft.PowerShell.Commands
                                 (exception is ArgumentNullException) ||
                                 (exception is IOException))
                             {
-                                //IOException contains specific message about the error occured and so no need for errordetails.
+                                // IOException contains specific message about the error occured and so no need for errordetails.
                                 WriteError(new ErrorRecord(ioException, "MoveFileInfoItemIOError", ErrorCategory.WriteError, destfile));
                             }
                             else
@@ -5923,17 +5895,17 @@ namespace Microsoft.PowerShell.Commands
                     }
                     else
                     {
-                        //IOException contains specific message about the error occured and so no need for errordetails.
+                        // IOException contains specific message about the error occured and so no need for errordetails.
                         WriteError(new ErrorRecord(ioException, "MoveFileInfoItemIOError", ErrorCategory.WriteError, file));
                     }
                 }
                 else
                 {
-                    //IOException contains specific message about the error occured and so no need for errordetails.
+                    // IOException contains specific message about the error occured and so no need for errordetails.
                     WriteError(new ErrorRecord(ioException, "MoveFileInfoItemIOError", ErrorCategory.WriteError, file));
                 }
             }
-        } // MoveFileInfoItem
+        }
 
         private void MoveDirectoryInfoItem(
             DirectoryInfo directory,
@@ -5945,7 +5917,7 @@ namespace Microsoft.PowerShell.Commands
                 "The caller should verify directory.");
 
             Dbg.Diagnostics.Assert(
-                !String.IsNullOrEmpty(destination),
+                !string.IsNullOrEmpty(destination),
                 "The caller should verify destination.");
 
             try
@@ -5973,7 +5945,6 @@ namespace Microsoft.PowerShell.Commands
                     try
                     {
                         // mask off the readonly and hidden bits and try again
-
                         directory.Attributes =
                             directory.Attributes & ~(FileAttributes.ReadOnly | FileAttributes.Hidden);
 
@@ -6017,10 +5988,10 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "MoveDirectoryItemIOError", ErrorCategory.WriteError, directory));
             }
-        } // MoveDirectoryItem
+        }
 
         private void CopyAndDelete(DirectoryInfo directory, string destination, bool force)
         {
@@ -6030,7 +6001,7 @@ namespace Microsoft.PowerShell.Commands
             }
             else if (ItemExists(destination) && !IsItemContainer(destination))
             {
-                String errorMessage = StringUtil.Format(FileSystemProviderStrings.DirectoryExist, destination);
+                string errorMessage = StringUtil.Format(FileSystemProviderStrings.DirectoryExist, destination);
                 Exception e = new IOException(errorMessage);
 
                 WriteError(new ErrorRecord(
@@ -6083,7 +6054,7 @@ namespace Microsoft.PowerShell.Commands
         /// </param>
         public void GetProperty(string path, Collection<string> providerSpecificPickList)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -6094,32 +6065,11 @@ namespace Microsoft.PowerShell.Commands
 
             try
             {
-                FileSystemInfo fileSystemObject = null;// Get the directory object
-                bool isDirectory;
-                Exception accessException;
-                bool exists = Utils.NativeItemExists(path, out isDirectory, out accessException);
-
-                if (accessException != null)
-                {
-                    throw accessException;
-                }
-
-                if (exists)
-                {
-                    if (isDirectory)
-                    {
-                        fileSystemObject = new DirectoryInfo(path);
-                    }
-                    else
-                    {
-                        // Maybe the path is a file name so try a FileInfo instead
-                        fileSystemObject = new FileInfo(path);
-                    }
-                }
+                var fileSystemObject = GetFileSystemInfo(path, out bool isDirectory);
 
                 if (fileSystemObject == null)
                 {
-                    String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                    string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                     Exception e = new IOException(error);
                     WriteError(new ErrorRecord(
                         e,
@@ -6152,11 +6102,12 @@ namespace Microsoft.PowerShell.Commands
                                         {
                                             result = new PSObject();
                                         }
+
                                         result.Properties.Add(new PSNoteProperty(property, value));
                                     }
                                     else
                                     {
-                                        String error =
+                                        string error =
                                             StringUtil.Format(
                                                 FileSystemProviderStrings.PropertyNotFound,
                                                 property);
@@ -6169,7 +6120,7 @@ namespace Microsoft.PowerShell.Commands
                                     WriteError(new ErrorRecord(exception, "GetValueError", ErrorCategory.ReadError, property));
                                 }
                             }
-                        } // foreach (property in providerSpecificPickList
+                        }
                     }
                 }
             }
@@ -6179,7 +6130,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "GetPropertyIOError", ErrorCategory.ReadError, path));
             }
             catch (UnauthorizedAccessException accessException)
@@ -6191,23 +6142,20 @@ namespace Microsoft.PowerShell.Commands
             {
                 WritePropertyObject(result, path);
             }
-        } // GetProperty
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the get-itemproperty cmdlet.
         /// This feature is not required by the File System provider.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <param name="providerSpecificPickList">
         /// A list of properties that should be retrieved. If this parameter is null
         /// or empty, all properties should be retrieved.
         /// </param>
-        ///
         /// <returns>
         /// Null.  This feature is not required by the File System provider.
         /// </returns>
@@ -6221,30 +6169,25 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Sets the specified properties on the item at the given path.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the item on which to set the properties.
         /// </param>
-        ///
         /// <param name="propertyToSet">
         /// A PSObject which contains a collection of the names and values
         /// of the properties to be set.  The File System provider supports setting
         /// only the "Attributes" property.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
-        ///
         /// <exception cref="System.ArgumentNullException">
         ///     propertyToSet is null.
         /// </exception>
-        ///
         public void SetProperty(string path, PSObject propertyToSet)
         {
             // verify parameters
 
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -6257,37 +6200,14 @@ namespace Microsoft.PowerShell.Commands
             path = NormalizePath(path);
 
             PSObject results = new PSObject();
-            PSObject fileSystemInfoShell = null;
-            bool isContainer = false;
 
-            // Create a PSObject with either a DirectoryInfo or FileInfo object
-            // at its core.
+            var fsinfo = GetFileSystemInfo(path, out bool isDirectory);
 
-            bool isDirectory;
-            Exception accessException;
-            bool exists = Utils.NativeItemExists(path, out isDirectory, out accessException);
-
-            if (accessException != null)
+            // Create a PSObject with either a DirectoryInfo or FileInfo object at its core.
+            if (fsinfo != null)
             {
-                throw accessException;
-            }
+                PSObject fileSystemInfoShell = PSObject.AsPSObject(fsinfo);
 
-            if (exists)
-            {
-                if (isDirectory)
-                {
-                    isContainer = true;
-                    fileSystemInfoShell = PSObject.AsPSObject(new DirectoryInfo(path));
-                }
-                else
-                {
-                    // Maybe the path is a file name so try a FileInfo instead
-                    fileSystemInfoShell = PSObject.AsPSObject(new FileInfo(path));
-                }
-            }
-
-            if (fileSystemInfoShell != null)
-            {
                 bool propertySet = false;
 
                 foreach (PSMemberInfo property in propertyToSet.Properties)
@@ -6297,7 +6217,7 @@ namespace Microsoft.PowerShell.Commands
                     // Get the confirmation text
                     string action = null;
 
-                    if (isContainer)
+                    if (isDirectory)
                     {
                         action = FileSystemProviderStrings.SetPropertyActionDirectory;
                     }
@@ -6325,7 +6245,7 @@ namespace Microsoft.PowerShell.Commands
                     }
 
                     string resource =
-                        String.Format(
+                        string.Format(
                             Host.CurrentCulture,
                             resourceTemplate,
                             path,
@@ -6352,7 +6272,7 @@ namespace Microsoft.PowerShell.Commands
                                 if ((attributes & ~(FileAttributes.Archive | FileAttributes.Hidden |
                                                         FileAttributes.Normal | FileAttributes.ReadOnly | FileAttributes.System)) != 0)
                                 {
-                                    String error =
+                                    string error =
                                         StringUtil.Format(
                                             FileSystemProviderStrings.AttributesNotSupported,
                                             property);
@@ -6368,15 +6288,15 @@ namespace Microsoft.PowerShell.Commands
                         }
                         else
                         {
-                            String error =
+                            string error =
                                 StringUtil.Format(
                                     FileSystemProviderStrings.PropertyNotFound,
                                     property);
                             Exception e = new IOException(error);
                             WriteError(new ErrorRecord(e, "SetPropertyError", ErrorCategory.ReadError, property));
                         }
-                    } // ShouldProcess
-                } // foreach property
+                    }
+                }
 
                 if (propertySet)
                 {
@@ -6385,7 +6305,7 @@ namespace Microsoft.PowerShell.Commands
             }
             else
             {
-                String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                string error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
                 Exception e = new IOException(error);
                 WriteError(new ErrorRecord(
                     e,
@@ -6393,27 +6313,23 @@ namespace Microsoft.PowerShell.Commands
                     ErrorCategory.ObjectNotFound,
                     path));
             }
-        } // SetProperty
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the set-itemproperty cmdlet.
         /// This feature is not required by the File System provider.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to set the dynamic parameters.
         /// </param>
-        ///
         /// <param name="propertyValue">
         /// A PSObject which contains a collection of the name, type, value
         /// of the properties to be set.
         /// </param>
-        ///
         /// <returns>
         /// Null.  This feature is not required by the File System provider.
         /// </returns>
-        ///
         public object SetPropertyDynamicParameters(
             string path,
             PSObject propertyValue)
@@ -6425,20 +6341,16 @@ namespace Microsoft.PowerShell.Commands
         /// Clears the specified properties on the item at the given path.
         /// The File System provider supports only the "Attributes" property.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the item on which to clear the properties.
         /// </param>
-        ///
         /// <param name="propertiesToClear">
         /// A collection of the names of the properties to clear.  The File System
         /// provider supports clearing only the "Attributes" property.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     Path is null or empty.
         /// </exception>
-        ///
         /// <exception cref="System.ArgumentNullException">
         ///     propertiesToClear is null or count is zero.
         /// </exception>
@@ -6446,7 +6358,7 @@ namespace Microsoft.PowerShell.Commands
             string path,
             Collection<string> propertiesToClear)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -6460,7 +6372,6 @@ namespace Microsoft.PowerShell.Commands
             }
 
             // Only the attributes property can be cleared
-
             if (propertiesToClear.Count > 1 ||
                 Host.CurrentCulture.CompareInfo.Compare("Attributes", propertiesToClear[0], CompareOptions.IgnoreCase) != 0)
             {
@@ -6470,11 +6381,9 @@ namespace Microsoft.PowerShell.Commands
             try
             {
                 // Now the only entry in the array should be the Attributes, so clear them
-
                 FileSystemInfo fileSystemInfo = null;
 
                 // Get the confirmation text
-
                 string action = null;
 
                 bool isContainer = IsItemContainer(path);
@@ -6494,14 +6403,13 @@ namespace Microsoft.PowerShell.Commands
                 string resourceTemplate = FileSystemProviderStrings.ClearPropertyResourceTemplate;
 
                 string resource =
-                    String.Format(
+                    string.Format(
                         Host.CurrentCulture,
                         resourceTemplate,
                         fileSystemInfo.FullName,
                         propertiesToClear[0]);
 
                 // Confirm the set with the user
-
                 if (ShouldProcess(resource, action))
                 {
                     fileSystemInfo.Attributes = FileAttributes.Normal;
@@ -6509,9 +6417,8 @@ namespace Microsoft.PowerShell.Commands
                     result.Properties.Add(new PSNoteProperty(propertiesToClear[0], fileSystemInfo.Attributes));
 
                     // Now write out the attribute that was cleared.
-
                     WritePropertyObject(result, path);
-                } // ShouldProcess
+                }
             }
             catch (UnauthorizedAccessException unauthorizedAccessException)
             {
@@ -6523,25 +6430,22 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "ClearPropertyIOError", ErrorCategory.WriteError, path));
             }
-        } // ClearProperty
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the clear-itemproperty cmdlet.
         /// This feature is not required by the File System provider.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to set the dynamic parameters.
         /// </param>
-        ///
         /// <param name="propertiesToClear">
         /// A collection of the names of the properties to clear.
         /// </param>
-        ///
         /// <returns>
         /// Null.  This feature is not required by the File System provider.
         /// </returns>
@@ -6561,21 +6465,18 @@ namespace Microsoft.PowerShell.Commands
         /// the specified file for reading, and returns the IContentReader interface
         /// to it.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the file to be opened for reading.
         /// </param>
-        ///
         /// <returns>
         /// An IContentReader for the specified file.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         public IContentReader GetContentReader(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -6634,8 +6535,8 @@ namespace Microsoft.PowerShell.Commands
                     // Get the stream name
                     streamName = dynParams.Stream;
 #endif
-                } // dynParams != null
-            } // DynamicParameters != null
+                }
+            }
 
 #if !UNIX
             // See if they've used the inline stream syntax. They have more than one colon.
@@ -6652,6 +6553,14 @@ namespace Microsoft.PowerShell.Commands
 
             try
             {
+                if (Directory.Exists(path))
+                {
+                    string errMsg = StringUtil.Format(SessionStateStrings.GetContainerContentException, path);
+                    ErrorRecord error = new ErrorRecord(new InvalidOperationException(errMsg), "GetContainerContentException", ErrorCategory.InvalidOperation, null);
+                    WriteError(error);
+                    return stream;
+                }
+
                 // Users can't both read as bytes, and specify a delimiter
                 if (delimiterSpecified)
                 {
@@ -6694,7 +6603,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "GetContentReaderIOError", ErrorCategory.ReadError, path));
             }
             catch (System.Security.SecurityException securityException)
@@ -6707,17 +6616,15 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return stream;
-        } // GetContentReader
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the get-content cmdlet.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <returns>
         /// An object that has properties and fields decorated with
         /// parsing attributes similar to a cmdlet class.
@@ -6732,21 +6639,18 @@ namespace Microsoft.PowerShell.Commands
         /// the specified file for writing, and returns the IContentReader interface
         /// to it.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path of the file to be opened for writing.
         /// </param>
-        ///
         /// <returns>
         /// An IContentWriter for the specified file.
         /// </returns>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         public IContentWriter GetContentWriter(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
@@ -6762,7 +6666,6 @@ namespace Microsoft.PowerShell.Commands
             bool suppressNewline = false;
 
             // Get the dynamic parameters
-
             if (DynamicParameters != null)
             {
                 FileSystemContentWriterDynamicParameters dynParams =
@@ -6787,7 +6690,7 @@ namespace Microsoft.PowerShell.Commands
                     streamName = dynParams.Stream;
 #endif
                     suppressNewline = dynParams.NoNewline.IsPresent;
-                } // dynParams != null
+                }
             }
 
 #if !UNIX
@@ -6805,7 +6708,15 @@ namespace Microsoft.PowerShell.Commands
 
             try
             {
-                stream = new FileSystemContentReaderWriter(path, streamName, filemode, FileAccess.Write, FileShare.Write, encoding, usingByteEncoding, false, this, false, suppressNewline);
+                if (Directory.Exists(path))
+                {
+                    string errMsg = StringUtil.Format(SessionStateStrings.WriteContainerContentException, path);
+                    ErrorRecord error = new ErrorRecord(new InvalidOperationException(errMsg), "WriteContainerContentException", ErrorCategory.InvalidOperation, null);
+                    WriteError(error);
+                    return stream;
+                }
+
+                stream = new FileSystemContentReaderWriter(path, streamName, filemode, FileAccess.Write, FileShare.ReadWrite, encoding, usingByteEncoding, false, this, false, suppressNewline);
             }
             catch (PathTooLongException pathTooLong)
             {
@@ -6825,7 +6736,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "GetContentWriterIOError", ErrorCategory.WriteError, path));
             }
             catch (System.Security.SecurityException securityException)
@@ -6838,18 +6749,16 @@ namespace Microsoft.PowerShell.Commands
             }
 
             return stream;
-        } // GetContentWriter
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the set-content and
         /// add-content cmdlets.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <returns>
         /// An object that has properties and fields decorated with
         /// parsing attributes similar to a cmdlet class.
@@ -6862,22 +6771,27 @@ namespace Microsoft.PowerShell.Commands
         /// <summary>
         /// Clears the content of the specified file.
         /// </summary>
-        ///
         /// <param name="path">
         /// The path to the file of which to clear the contents.
         /// </param>
-        ///
         /// <exception cref="System.ArgumentException">
         ///     path is null or empty.
         /// </exception>
         public void ClearContent(string path)
         {
-            if (String.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path))
             {
                 throw PSTraceSource.NewArgumentException("path");
             }
 
             path = NormalizePath(path);
+
+            if (Directory.Exists(path))
+            {
+                string errorMsg = StringUtil.Format(SessionStateStrings.ClearDirectoryContent, path);
+                WriteError(new ErrorRecord(new NotSupportedException(errorMsg), "ClearDirectoryContent", ErrorCategory.InvalidOperation, path));
+                return;
+            }
 
             try
             {
@@ -6908,7 +6822,7 @@ namespace Microsoft.PowerShell.Commands
                         streamName = writerDynamicParameters.Stream;
                     }
 
-                    if (String.IsNullOrEmpty(streamName))
+                    if (string.IsNullOrEmpty(streamName))
                     {
                         // See if they've used the inline stream syntax. They have more than one colon.
                         int firstColon = path.IndexOf(':');
@@ -6925,7 +6839,7 @@ namespace Microsoft.PowerShell.Commands
 
                 // If they're just working on the DATA stream, don't use the Alternate Data Stream
                 // utils to clear the stream - otherwise, the Win32 API will trash the other streams.
-                if (String.Equals(":$DATA", streamName, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(":$DATA", streamName, StringComparison.OrdinalIgnoreCase))
                 {
                     clearStream = false;
                 }
@@ -6934,7 +6848,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     FileStream fileStream = null;
 
-                    string streamAction = String.Format(
+                    string streamAction = string.Format(
                         CultureInfo.InvariantCulture,
                         FileSystemProviderStrings.StreamAction,
                         streamName, path);
@@ -6967,7 +6881,7 @@ namespace Microsoft.PowerShell.Commands
                 }
 
                 // For filesystem once content is cleared
-                WriteItemObject("", path, false);
+                WriteItemObject(string.Empty, path, false);
             }
             catch (ArgumentException argException)
             {
@@ -6975,7 +6889,7 @@ namespace Microsoft.PowerShell.Commands
             }
             catch (IOException ioException)
             {
-                //IOException contains specific message about the error occured and so no need for errordetails.
+                // IOException contains specific message about the error occured and so no need for errordetails.
                 WriteError(new ErrorRecord(ioException, "ClearContentIOError", ErrorCategory.WriteError, path));
             }
             catch (UnauthorizedAccessException accessException)
@@ -6993,8 +6907,8 @@ namespace Microsoft.PowerShell.Commands
                         FileStream fileStream = new FileStream(path, FileMode.Truncate, FileAccess.Write, FileShare.Write);
                         fileStream.Dispose();
 
-                        //For filesystem once content is cleared
-                        WriteItemObject("", path, false);
+                        // For filesystem once content is cleared
+                        WriteItemObject(string.Empty, path, false);
                     }
                     catch (UnauthorizedAccessException failure)
                     {
@@ -7011,17 +6925,15 @@ namespace Microsoft.PowerShell.Commands
                     WriteError(new ErrorRecord(accessException, "ClearContentUnauthorizedAccessError", ErrorCategory.PermissionDenied, path));
                 }
             }
-        } // ClearContent
+        }
 
         /// <summary>
         /// Gets the dynamic property parameters required by the clear-content cmdlet.
         /// </summary>
-        ///
         /// <param name="path">
         /// If the path was specified on the command line, this is the path
         /// to the item for which to get the dynamic parameters.
         /// </param>
-        ///
         /// <returns>
         /// A FileSystemClearContentDynamicParameters that provides access to the -Stream dynamic parameter.
         /// </returns>
@@ -7031,88 +6943,6 @@ namespace Microsoft.PowerShell.Commands
         }
 
         #endregion IContentCmdletProvider
-
-        internal static int SafeGetFileAttributes(string path)
-        {
-#if UNIX
-            System.IO.FileAttributes attr = System.IO.File.GetAttributes(path);
-
-            int result = 0;
-            if ((attr & FileAttributes.Archive) == FileAttributes.Archive)
-                result |= 0x20;
-            if ((attr & FileAttributes.Compressed) == FileAttributes.Compressed)
-                result |= 0x800;
-            if ((attr & FileAttributes.Device) == FileAttributes.Device)
-                result |= 0x40;
-            if ((attr & FileAttributes.Directory) == FileAttributes.Directory)
-                result |= 0x10;
-            if ((attr & FileAttributes.Encrypted) == FileAttributes.Encrypted)
-                result |= 0x4000;
-            if ((attr & FileAttributes.Hidden) == FileAttributes.Hidden)
-                result |= 0x2;
-            if ((attr & FileAttributes.IntegrityStream) == FileAttributes.IntegrityStream)
-                result |= 0x8000;
-            if ((attr & FileAttributes.Normal) == FileAttributes.Normal)
-                result |= 0x80;
-            if ((attr & FileAttributes.NoScrubData) == FileAttributes.NoScrubData)
-                result |= 0x20000;
-            if ((attr & FileAttributes.NotContentIndexed) == FileAttributes.NotContentIndexed)
-                result |= 0x2000;
-            if ((attr & FileAttributes.Offline) == FileAttributes.Offline)
-                result |= 0x1000;
-            if ((attr & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
-                result |= 0x1;
-            if ((attr & FileAttributes.ReparsePoint) == FileAttributes.ReparsePoint)
-                result |= 0x400;
-            if ((attr & FileAttributes.SparseFile) == FileAttributes.SparseFile)
-                result |= 0x200;
-            if ((attr & FileAttributes.System) == FileAttributes.System)
-                result |= 0x4;
-            if ((attr & FileAttributes.Temporary) == FileAttributes.Temporary)
-                result |= 0x100;
-
-            return result;
-#else
-            return WinSafeGetFileAttributes(path);
-#endif
-        }
-
-        internal static int WinSafeGetFileAttributes(string path)
-        {
-            int result = Utils.NativeMethods.GetFileAttributes(path);
-            if (result == -1)
-            {
-                int errorCode = Marshal.GetLastWin32Error();
-                if (errorCode == 5)
-                {
-                    // Handle "Access denied" specifically.
-                    Win32Exception win32Exception = new Win32Exception(errorCode);
-                    throw new UnauthorizedAccessException(win32Exception.Message, win32Exception);
-                }
-                else if (errorCode == 32)
-                {
-                    // Errorcode 32 is 'ERROR_SHARING_VIOLATION' i.e.
-                    // The process cannot access the file because it is being used by another process.
-                    // GetFileAttributes may return INVALID_FILE_ATTRIBUTES for a system file or directory because of this error.
-                    // GetFileAttributes function tries to open the file with FILE_READ_ATTRIBUTES access right but it fails if the
-                    // sharing flag for the file is set to 0x00000000.This flag prevents it from opening a file for delete, read, or
-                    // write access. For example: C:\pagefile.sys is always opened by OS with sharing flag 0x00000000.
-                    // But FindFirstFile is still able to get attributes as this api retrieves the required information using a find
-                    // handle generated with FILE_LIST_DIRECTORY access.
-                    // Fall back to FindFirstFile to check if the file actually exists.
-                    IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
-                    Utils.NativeMethods.WIN32_FIND_DATA findData;
-                    IntPtr findHandle = Utils.NativeMethods.FindFirstFile(path, out findData);
-                    if (findHandle != INVALID_HANDLE_VALUE)
-                    {
-                        Utils.NativeMethods.FindClose(findHandle);
-                        return (int)findData.dwFileAttributes;
-                    }
-                }
-            }
-
-            return result;
-        }
 
         /// <summary>
         /// -raw is not allowed when -first,-last or -wait is specified
@@ -7233,7 +7063,7 @@ namespace Microsoft.PowerShell.Commands
             [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
             internal static extern int WNetGetConnection(string localName, StringBuilder remoteName, ref int remoteNameLength);
 
-#if CORECLR //TODO:CORECLR Win32 function 'PathIsNetworkPath' is in an extension API set which is currently not on CSS.
+#if CORECLR // TODO:CORECLR Win32 function 'PathIsNetworkPath' is in an extension API set which is currently not on CSS.
             /// <summary>
             /// Searches a path for a drive letter within the range of 'A' to 'Z' and returns the corresponding drive number.
             /// </summary>
@@ -7243,17 +7073,6 @@ namespace Microsoft.PowerShell.Commands
             /// <returns>Returns 0 through 25 (corresponding to 'A' through 'Z') if the path has a drive letter, or -1 otherwise.</returns>
             [DllImport("api-ms-win-core-shlwapi-legacy-l1-1-0.dll", CharSet = CharSet.Unicode)]
             internal static extern int PathGetDriveNumber(string path);
-
-            /// <summary>
-            /// Determines if a path string is a valid Universal Naming Convention (UNC) path, as opposed to a path based on a drive letter.
-            /// </summary>
-            /// <param name="path">
-            /// Path of the file being executed
-            /// </param>
-            /// <returns>Returns TRUE if the string is a valid UNC path; otherwise, FALSE.</returns>
-            [DllImport("api-ms-win-core-shlwapi-legacy-l1-1-0.dll", CharSet = CharSet.Unicode)]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            internal static extern bool PathIsUNC(string path);
 
             /// <summary>
             /// The API 'PathIsNetworkPath' is not available in CoreSystem.
@@ -7268,7 +7087,7 @@ namespace Microsoft.PowerShell.Commands
                     return false;
                 }
 
-                if (PathIsUNC(path))
+                if (Utils.PathIsUnc(path))
                 {
                     return true;
                 }
@@ -7290,6 +7109,7 @@ namespace Microsoft.PowerShell.Commands
                         return true;
                     }
                 }
+
                 return false;
             }
 #else
@@ -7330,31 +7150,73 @@ namespace Microsoft.PowerShell.Commands
             /// </summary>
             /// <param name="name">Path of the symbolic link.</param>
             /// <param name="destination">Path of the target of the symbolic link.</param>
-            /// <param name="destinationType">0 for destination as file and 1 for destination as directory.</param>
+            /// <param name="symbolicLinkFlags">Flag values from SymbolicLinkFlags enum.</param>
             /// <returns>1 on successful creation.</returns>
             [DllImport(PinvokeDllNames.CreateSymbolicLinkDllName, CharSet = CharSet.Unicode, SetLastError = true)]
-            internal static extern int CreateSymbolicLink(string name, string destination, int destinationType);
+            [return: MarshalAs(UnmanagedType.I1)]
+            internal static extern bool CreateSymbolicLink(string name, string destination, SymbolicLinkFlags symbolicLinkFlags);
+
+            /// <summary>
+            /// Flags used when creating a symbolic link.
+            /// </summary>
+            [Flags]
+            internal enum SymbolicLinkFlags
+            {
+                /// <summary>
+                /// Symbolic link is a file.
+                /// </summary>
+                File = 0,
+
+                /// <summary>
+                /// Symbolic link is a directory.
+                /// </summary>
+                Directory = 1,
+
+                /// <summary>
+                /// Allow creation of symbolic link without elevation.  Requires Developer mode.
+                /// </summary>
+                AllowUnprivilegedCreate = 2,
+            }
 
             /// <summary>
             /// Creates a hard link using the native API.
             /// </summary>
             /// <param name="name">Name of the hard link.</param>
-            /// <param name="existingFileName">Path to the target of the hard link</param>
+            /// <param name="existingFileName">Path to the target of the hard link.</param>
             /// <param name="SecurityAttributes"></param>
             /// <returns></returns>
             [DllImport(PinvokeDllNames.CreateHardLinkDllName, CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
             internal static extern bool CreateHardLink(string name, string existingFileName, IntPtr SecurityAttributes);
 
-            [Flags]
-            internal enum FileAttributes
-            {
-                Hidden = 0x0002,
-                Directory = 0x0010
-            }
+            // OneDrive placeholder support
+#if !UNIX
+            /// <summary>
+            /// Returns the placeholder compatibility mode for the current process.
+            /// </summary>
+            /// <returns>The process's placeholder compatibily mode (PHCM_xxx), or a negative value on error (PCHM_ERROR_xxx).</returns>
+            [DllImport("ntdll.dll")]
+            internal static extern sbyte RtlQueryProcessPlaceholderCompatibilityMode();
+
+            /// <summary>
+            /// Sets the placeholder compatibility mode for the current process.
+            /// </summary>
+            /// <param name="pcm">The placeholder compatibility mode to set.</param>
+            /// <returns>The process's previous placeholder compatibily mode (PHCM_xxx), or a negative value on error (PCHM_ERROR_xxx).</returns>
+            [DllImport("ntdll.dll")]
+            internal static extern sbyte RtlSetProcessPlaceholderCompatibilityMode(sbyte pcm);
+
+            internal const sbyte PHCM_APPLICATION_DEFAULT = 0;
+            internal const sbyte PHCM_DISGUISE_PLACEHOLDER = 1;
+            internal const sbyte PHCM_EXPOSE_PLACEHOLDERS = 2;
+            internal const sbyte PHCM_MAX = 2;
+            internal const sbyte PHCM_ERROR_INVALID_PARAMETER = -1;
+            internal const sbyte PHCM_ERROR_NO_TEB = -2;
+#endif
         }
 
         /// <summary>
-        /// Managed equivalent of NETRESOURCE structure of WNet API
+        /// Managed equivalent of NETRESOURCE structure of WNet API.
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         private struct NetResource
@@ -7382,7 +7244,7 @@ namespace Microsoft.PowerShell.Commands
             private HashSet<(UInt64, UInt64)> _visitations;
 
             /// <summary>
-            /// Construct a new InodeTracker with an initial path
+            /// Construct a new InodeTracker with an initial path.
             /// </summary>
             internal InodeTracker(string path)
             {
@@ -7418,7 +7280,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         #endregion
-    } // class FileSystemProvider
+    }
 
     internal static class SafeInvokeCommand
     {
@@ -7426,6 +7288,7 @@ namespace Microsoft.PowerShell.Commands
         {
             return Invoke(ps, fileSystemContext, cmdletContext, true);
         }
+
         public static Hashtable Invoke(System.Management.Automation.PowerShell ps, FileSystemProvider fileSystemContext, CmdletProviderContext cmdletContext, bool shouldHaveOutput)
         {
             bool useFileSystemProviderContext = (cmdletContext == null);
@@ -7452,6 +7315,7 @@ namespace Microsoft.PowerShell.Commands
                     cmdletContext.WriteError(new ErrorRecord(e, "CopyFileRemoteExecutionError", ErrorCategory.InvalidOperation, ps));
                     ps.Commands.Clear();
                 }
+
                 return null;
             }
 
@@ -7480,6 +7344,7 @@ namespace Microsoft.PowerShell.Commands
                     Dbg.Diagnostics.Assert(output[0] != null, "Expected an output from the remote call.");
                     return null;
                 }
+
                 return (Hashtable)output[0];
             }
 
@@ -7503,12 +7368,12 @@ namespace Microsoft.PowerShell.Commands
     }
 
     /// <summary>
-    /// Defines the container cmdlet dynamic providers
+    /// Defines the container cmdlet dynamic providers.
     /// </summary>
     internal sealed class GetChildDynamicParameters
     {
         /// <summary>
-        /// Gets or sets the attribute filtering enum evaluator
+        /// Gets or sets the attribute filtering enum evaluator.
         /// </summary>
         [Parameter]
         public FlagsExpression<FileAttributes> Attributes { get; set; }
@@ -7520,63 +7385,73 @@ namespace Microsoft.PowerShell.Commands
         public SwitchParameter FollowSymlink { get; set; }
 
         /// <summary>
-        /// Gets or sets the filter directory flag
+        /// Gets or sets the filter directory flag.
         /// </summary>
         [Parameter]
         [Alias("ad", "d")]
         public SwitchParameter Directory
         {
             get { return _attributeDirectory; }
+
             set { _attributeDirectory = value; }
         }
+
         private bool _attributeDirectory;
 
         /// <summary>
-        /// Gets or sets the filter file flag
+        /// Gets or sets the filter file flag.
         /// </summary>
         [Parameter]
         [Alias("af")]
         public SwitchParameter File
         {
             get { return _attributeFile; }
+
             set { _attributeFile = value; }
         }
+
         private bool _attributeFile;
 
         /// <summary>
-        /// Gets or sets the filter hidden flag
+        /// Gets or sets the filter hidden flag.
         /// </summary>
         [Parameter]
         [Alias("ah", "h")]
         public SwitchParameter Hidden
         {
             get { return _attributeHidden; }
+
             set { _attributeHidden = value; }
         }
+
         private bool _attributeHidden;
 
         /// <summary>
-        /// Gets or sets the filter readonly flag
+        /// Gets or sets the filter readonly flag.
         /// </summary>
         [Parameter]
         [Alias("ar")]
         public SwitchParameter ReadOnly
         {
             get { return _attributeReadOnly; }
+
             set { _attributeReadOnly = value; }
         }
+
         private bool _attributeReadOnly;
 
         /// <summary>
-        /// Gets or sets the filter system flag
+        /// Gets or sets the filter system flag.
         /// </summary>
         [Parameter]
         [Alias("as")]
         public SwitchParameter System
         {
             get { return _attributeSystem; }
+
             set { _attributeSystem = value; }
         }
+
         private bool _attributeSystem;
     }
 
@@ -7591,17 +7466,7 @@ namespace Microsoft.PowerShell.Commands
         /// </summary>
         [Parameter]
         [ArgumentToEncodingTransformationAttribute()]
-        [ArgumentCompletions(
-            EncodingConversion.Ascii,
-            EncodingConversion.BigEndianUnicode,
-            EncodingConversion.OEM,
-            EncodingConversion.Unicode,
-            EncodingConversion.Utf7,
-            EncodingConversion.Utf8,
-            EncodingConversion.Utf8Bom,
-            EncodingConversion.Utf8NoBom,
-            EncodingConversion.Utf32
-            )]
+        [ArgumentEncodingCompletionsAttribute]
         [ValidateNotNullOrEmpty]
         public Encoding Encoding
         {
@@ -7609,6 +7474,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 return _encoding;
             }
+
             set
             {
                 _encoding = value;
@@ -7616,10 +7482,11 @@ namespace Microsoft.PowerShell.Commands
                 WasStreamTypeSpecified = true;
             }
         }
+
         private Encoding _encoding = ClrFacade.GetDefaultEncoding();
 
         /// <summary>
-        /// Return file contents as a byte stream or create file from a series of bytes
+        /// Return file contents as a byte stream or create file from a series of bytes.
         /// </summary>
         [Parameter]
         public SwitchParameter AsByteStream { get; set; }
@@ -7629,7 +7496,7 @@ namespace Microsoft.PowerShell.Commands
         /// A parameter to return a stream of an item.
         /// </summary>
         [Parameter]
-        public String Stream { get; set; }
+        public string Stream { get; set; }
 #endif
 
         /// <summary>
@@ -7637,8 +7504,7 @@ namespace Microsoft.PowerShell.Commands
         /// if the stream was opened with a user-specified encoding, false otherwise.
         /// </summary>
         public bool WasStreamTypeSpecified { get; private set; }
-
-    } // class FileSystemContentDynamicParametersBase
+    }
 
     /// <summary>
     /// Defines the dynamic parameters used by the Clear-Content cmdlet.
@@ -7650,9 +7516,9 @@ namespace Microsoft.PowerShell.Commands
         /// A parameter to return a stream of an item.
         /// </summary>
         [Parameter]
-        public String Stream { get; set; }
+        public string Stream { get; set; }
 #endif
-    } //FileSystemContentWriterDynamicParameters
+    }
 
     /// <summary>
     /// Defines the dynamic parameters used by the set-content and
@@ -7670,6 +7536,7 @@ namespace Microsoft.PowerShell.Commands
             {
                 return _suppressNewline;
             }
+
             set
             {
                 _suppressNewline = value;
@@ -7677,7 +7544,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         private bool _suppressNewline = false;
-    } //FileSystemContentWriterDynamicParameters
+    }
 
     /// <summary>
     /// Defines the dynamic parameters used by the get-content cmdlet.
@@ -7702,6 +7569,7 @@ namespace Microsoft.PowerShell.Commands
                 _delimiter = value;
             }
         }
+
         private string _delimiter = "\n";
 
         /// <summary>
@@ -7715,13 +7583,14 @@ namespace Microsoft.PowerShell.Commands
             get
             {
                 return _wait;
-            } // get
+            }
 
             set
             {
                 _wait = value;
-            } // set
+            }
         }
+
         private bool _wait;
 
         /// <summary>
@@ -7735,22 +7604,25 @@ namespace Microsoft.PowerShell.Commands
             {
                 return _isRaw;
             }
+
             set
             {
                 _isRaw = value;
             }
         }
+
         private bool _isRaw;
 
         /// <summary>
         /// Gets the status of the delimiter parameter.  Returns true
         /// if the delimiter was explicitly specified by the user, false otherwise.
         /// </summary>
-        public bool DelimiterSpecified { get; private set;
-// get
-        } // DelimiterSpecified
-    } // class FileSystemContentReaderDynamicParameters
-
+        public bool DelimiterSpecified
+        {
+            get; private set;
+            // get
+        }
+    }
 
     /// <summary>
     /// Provides the dynamic parameters for test-path on the file system.
@@ -7764,11 +7636,11 @@ namespace Microsoft.PowerShell.Commands
         public DateTime? OlderThan { get; set; }
 
         /// <summary>
-        /// A parameter to test if a file is newer than a certain time or date
+        /// A parameter to test if a file is newer than a certain time or date.
         /// </summary>
         [Parameter]
         public DateTime? NewerThan { get; set; }
-    } // class FileSystemItemProviderDynamicParameters
+    }
 
     /// <summary>
     /// Provides the dynamic parameters for Get-Item on the file system.
@@ -7784,7 +7656,7 @@ namespace Microsoft.PowerShell.Commands
         [SuppressMessage("Microsoft.Performance", "CA1819:PropertiesShouldNotReturnArrays")]
         public string[] Stream { get; set; }
 #endif
-    } // class FileSystemItemProviderDynamicParameters
+    }
 
     /// <summary>
     /// Provides the dynamic parameters for Remove-Item on the file system.
@@ -7800,7 +7672,7 @@ namespace Microsoft.PowerShell.Commands
         [SuppressMessage("Microsoft.Performance", "CA1819:PropertiesShouldNotReturnArrays")]
         public string[] Stream { get; set; }
 #endif
-    } // class FileSystemItemProviderDynamicParameters
+    }
 
     #endregion
 
@@ -7811,7 +7683,7 @@ namespace Microsoft.PowerShell.Commands
     /// </summary>
     public static class InternalSymbolicLinkLinkCodeMethods
     {
-        //This size comes from measuring the size of the header of REPARSE_GUID_DATA_BUFFER
+        // This size comes from measuring the size of the header of REPARSE_GUID_DATA_BUFFER
         private const int REPARSE_GUID_DATA_BUFFER_HEADER_SIZE = 24;
 
         // Maximum reparse buffer info size. The max user defined reparse
@@ -7830,10 +7702,14 @@ namespace Microsoft.PowerShell.Commands
 
         private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003;
 
+        private const uint IO_REPARSE_TAG_APPEXECLINK = 0x8000001B;
+
         private const string NonInterpretedPathPrefix = @"\??\";
 
+        private const int MAX_PATH = 260;
+
         [Flags]
-        //dwDesiredAccess of CreateFile
+        // dwDesiredAccess of CreateFile
         internal enum FileDesiredAccess : uint
         {
             GenericRead = 0x80000000,
@@ -7843,7 +7719,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         [Flags]
-        //dwShareMode of CreateFile
+        // dwShareMode of CreateFile
         internal enum FileShareMode : uint
         {
             None = 0x00000000,
@@ -7852,7 +7728,7 @@ namespace Microsoft.PowerShell.Commands
             Delete = 0x00000004,
         }
 
-        //dwCreationDisposition of CreateFile
+        // dwCreationDisposition of CreateFile
         internal enum FileCreationDisposition : uint
         {
             New = 1,
@@ -7863,7 +7739,7 @@ namespace Microsoft.PowerShell.Commands
         }
 
         [Flags]
-        //dwFlagsAndAttributes
+        // dwFlagsAndAttributes
         internal enum FileAttributes : uint
         {
             Readonly = 0x00000001,
@@ -7915,6 +7791,17 @@ namespace Microsoft.PowerShell.Commands
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        private struct REPARSE_DATA_BUFFER_APPEXECLINK
+        {
+            public uint ReparseTag;
+            public ushort ReparseDataLength;
+            public ushort Reserved;
+            public uint StringCount;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 0x3FF0)]
+            public byte[] StringList;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         private struct BY_HANDLE_FILE_INFORMATION
         {
             public uint FileAttributes;
@@ -7936,7 +7823,7 @@ namespace Microsoft.PowerShell.Commands
             public ushort Data2;
             public ushort Data3;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
-            public Char[] Data4;
+            public char[] Data4;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -7947,7 +7834,7 @@ namespace Microsoft.PowerShell.Commands
             public ushort Reserved;
             public GUID ReparseGuid;
             [MarshalAs(UnmanagedType.ByValArray, SizeConst = MAX_REPARSE_SIZE)]
-            public Char[] DataBuffer;
+            public char[] DataBuffer;
         }
 
         [DllImport(PinvokeDllNames.DeviceIoControlDllName, CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
@@ -7956,27 +7843,8 @@ namespace Microsoft.PowerShell.Commands
             IntPtr OutBuffer, int nOutBufferSize,
             out int pBytesReturned, IntPtr lpOverlapped);
 
-#if !CORECLR
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern IntPtr FindFirstFileName(
-                string lpFileName,
-                uint flags,
-                ref UInt32 StringLength,
-                StringBuilder LinkName);
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool FindNextFileName(
-                IntPtr hFindStream,
-                ref UInt32 StringLength,
-                StringBuilder LinkName);
-
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool FindClose(IntPtr hFindFile);
-
-#endif
-
         [DllImport(PinvokeDllNames.GetFileInformationByHandleDllName, SetLastError = true, CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetFileInformationByHandle(
                 IntPtr hFile,
                 out BY_HANDLE_FILE_INFORMATION lpFileInformation);
@@ -7991,32 +7859,76 @@ namespace Microsoft.PowerShell.Commands
             FileAttributes dwFlagsAndAttributes,
             IntPtr hTemplateFile);
 
+        internal sealed class SafeFindHandle : SafeHandleZeroOrMinusOneIsInvalid
+        {
+            private SafeFindHandle() : base(true) { }
+
+            protected override bool ReleaseHandle()
+            {
+                return FindClose(this.handle);
+            }
+
+            [DllImport(PinvokeDllNames.FindCloseDllName)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            private static extern bool FindClose(IntPtr handle);
+        }
+
+        // SetLastError is false as the use of this API doesn't not require GetLastError() to be called
+        [DllImport(PinvokeDllNames.FindFirstFileDllName, EntryPoint = "FindFirstFileExW", SetLastError = false, CharSet = CharSet.Unicode)]
+        private static extern SafeFindHandle FindFirstFileEx(string lpFileName, FINDEX_INFO_LEVELS fInfoLevelId, ref WIN32_FIND_DATA lpFindFileData, FINDEX_SEARCH_OPS fSearchOp, IntPtr lpSearchFilter, int dwAdditionalFlags);
+
+        internal enum FINDEX_INFO_LEVELS : uint
+        {
+            FindExInfoStandard = 0x0u,
+            FindExInfoBasic = 0x1u,
+            FindExInfoMaxInfoLevel = 0x2u,
+        }
+
+        internal enum FINDEX_SEARCH_OPS : uint
+        {
+            FindExSearchNameMatch = 0x0u,
+            FindExSearchLimitToDirectories = 0x1u,
+            FindExSearchLimitToDevices = 0x2u,
+            FindExSearchMaxSearchOp = 0x3u,
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        internal unsafe struct WIN32_FIND_DATA
+        {
+            internal uint dwFileAttributes;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+            internal System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+            internal uint nFileSizeHigh;
+            internal uint nFileSizeLow;
+            internal uint dwReserved0;
+            internal uint dwReserved1;
+            internal fixed char cFileName[MAX_PATH];
+            internal fixed char cAlternateFileName[14];
+        }
+
         /// <summary>
         /// Gets the target of the specified reparse point.
         /// </summary>
         /// <param name="instance">The object of FileInfo or DirectoryInfo type.</param>
-        /// <returns>The target of the reparse point</returns>
-        public static IEnumerable<string> GetTarget(PSObject instance)
+        /// <returns>The target of the reparse point.</returns>
+        public static string GetTarget(PSObject instance)
         {
-            FileSystemInfo fileSysInfo = instance.BaseObject as FileSystemInfo;
-
-            if (fileSysInfo != null)
+            if (instance.BaseObject is FileSystemInfo fileSysInfo)
             {
-                if (Platform.IsWindows)
+#if !UNIX
+                using (SafeFileHandle handle = OpenReparsePoint(fileSysInfo.FullName, FileDesiredAccess.GenericRead))
                 {
-                    using (SafeFileHandle handle = OpenReparsePoint(fileSysInfo.FullName, FileDesiredAccess.GenericRead))
-                    {
-                        string linkTarget = InternalGetTarget(handle);
+                    string linkTarget = WinInternalGetTarget(handle);
 
-                        if (linkTarget != null)
-                            return (new string[] { linkTarget });
-                    }
+                    return linkTarget;
                 }
-
-                return InternalGetTarget(fileSysInfo.FullName);
+#else
+               return UnixInternalGetTarget(fileSysInfo.FullName);
+#endif
             }
-            else
-                return null;
+
+            return null;
         }
 
         /// <summary>
@@ -8032,85 +7944,23 @@ namespace Microsoft.PowerShell.Commands
             {
                 return InternalGetLinkType(fileSysInfo);
             }
-            else
-                return null;
+
+            return null;
         }
 
-        private static List<string> InternalGetTarget(string filePath)
-        {
-            var links = new List<string>();
 #if UNIX
+        private static string UnixInternalGetTarget(string filePath)
+        {
             string link = Platform.NonWindowsInternalGetTarget(filePath);
-            if (!String.IsNullOrEmpty(link))
-            {
-                links.Add(link);
-            }
-            else
+
+            if (string.IsNullOrEmpty(link))
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             }
 
-#elif !CORECLR //FindFirstFileName, FindNextFileName and FindClose are not available on Core Clr
-            UInt32 linkStringLength = 0;
-            var linkName = new StringBuilder();
-
-            // First get the length for the linkName buffer.
-            IntPtr fileHandle = InternalSymbolicLinkLinkCodeMethods.FindFirstFileName(filePath, 0, ref linkStringLength, linkName);
-            int lastError = Marshal.GetLastWin32Error();
-
-            // Return handle is INVALID_HANDLE_VALUE and LastError was ERROR_MORE_DATA
-            if ((fileHandle == (IntPtr)(-1)) && (lastError == 234))
-            {
-                linkName = new StringBuilder((int)linkStringLength);
-                fileHandle = InternalSymbolicLinkLinkCodeMethods.FindFirstFileName(filePath, 0, ref linkStringLength, linkName);
-                lastError = Marshal.GetLastWin32Error();
-            }
-
-            if (fileHandle == (IntPtr)(-1))
-            {
-                throw new Win32Exception(lastError);
-            }
-
-            bool continueFind = false;
-
-            try
-            {
-                do
-                {
-                    StringBuilder fullName = new StringBuilder();
-                    fullName.Append(Path.GetPathRoot(filePath));    //hard link source and target must be on the same drive. So we can use the source for find the path root.
-                    fullName.Append(linkName.ToString());
-                    FileInfo fInfo = new FileInfo(fullName.ToString());
-
-                    //Don't add the target link to the list.
-
-                    if (String.Compare(fInfo.FullName, filePath, StringComparison.OrdinalIgnoreCase) != 0)
-                        links.Add(fInfo.FullName);
-
-                    continueFind = InternalSymbolicLinkLinkCodeMethods.FindNextFileName(fileHandle, ref linkStringLength, linkName);
-
-                    lastError = Marshal.GetLastWin32Error();
-
-                    if (!continueFind && lastError == 234) // ERROR_MORE_DATA
-                    {
-                        linkName = new StringBuilder((int)linkStringLength);
-                        continueFind = InternalSymbolicLinkLinkCodeMethods.FindNextFileName(fileHandle, ref linkStringLength, linkName);
-                    }
-
-                    if (!continueFind && lastError != 38) //ERROR_HANDLE_EOF. No more links.
-                    {
-                        throw new Win32Exception(lastError);
-                    }
-                }
-                while (continueFind);
-            }
-            finally
-            {
-                InternalSymbolicLinkLinkCodeMethods.FindClose(fileHandle);
-            }
-#endif
-            return links;
+            return link;
         }
+#endif
 
         private static string InternalGetLinkType(FileSystemInfo fileInfo)
         {
@@ -8144,12 +7994,11 @@ namespace Microsoft.PowerShell.Commands
                     int bytesReturned;
                     string linkType = null;
 
-                    //OACR warning 62001 about using DeviceIOControl has been disabled.
+                    // OACR warning 62001 about using DeviceIOControl has been disabled.
                     // According to MSDN guidance DangerousAddRef() and DangerousRelease() have been used.
-
                     handle.DangerousAddRef(ref success);
 
-                    //Get Buffer size
+                    // Get Buffer size
                     IntPtr dangerousHandle = handle.DangerousGetHandle();
 
                     bool result = DeviceIoControl(dangerousHandle, FSCTL_GET_REPARSE_POINT,
@@ -8166,13 +8015,23 @@ namespace Microsoft.PowerShell.Commands
 
                     REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
 
-                    if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_SYMLINK)
-                        linkType = "SymbolicLink";
-                    else if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
-                        linkType = "Junction";
-                    else
+                    switch (reparseDataBuffer.ReparseTag)
                     {
-                        linkType = IsHardLink(ref dangerousHandle) ? "HardLink" : null;
+                        case IO_REPARSE_TAG_SYMLINK:
+                            linkType = "SymbolicLink";
+                            break;
+
+                        case IO_REPARSE_TAG_MOUNT_POINT:
+                            linkType = "Junction";
+                            break;
+
+                        case IO_REPARSE_TAG_APPEXECLINK:
+                            linkType = "AppExeCLink";
+                            break;
+
+                        default:
+                            linkType = IsHardLink(ref dangerousHandle) ? "HardLink" : null;
+                            break;
                     }
 
                     return linkType;
@@ -8200,16 +8059,29 @@ namespace Microsoft.PowerShell.Commands
 
         internal static bool IsReparsePoint(FileSystemInfo fileInfo)
         {
-            if (Platform.IsWindows)
+            return fileInfo.Attributes.HasFlag(System.IO.FileAttributes.ReparsePoint);
+        }
+
+        internal static bool IsReparsePointWithTarget(FileSystemInfo fileInfo)
+        {
+            if (!IsReparsePoint(fileInfo))
             {
-                // Note that this class also has a enum called FileAttributes, so use fully qualified name
-                return (fileInfo.Attributes & System.IO.FileAttributes.ReparsePoint)
-                       == System.IO.FileAttributes.ReparsePoint;
+                return false;
             }
-            else
+#if !UNIX
+            var data = new WIN32_FIND_DATA();
+            using (var handle = FindFirstFileEx(fileInfo.FullName, FINDEX_INFO_LEVELS.FindExInfoBasic, ref data, FINDEX_SEARCH_OPS.FindExSearchNameMatch, IntPtr.Zero, 0))
             {
-                return Platform.NonWindowsIsSymLink(fileInfo);
+                // Name surrogates (0x20000000) are reparse points that point to other named entities local to the filesystem (like symlinks)
+                // In the case of OneDrive, they are not surrogates and would be safe to recurse into.
+                // This code is equivalent to the IsReparseTagNameSurrogate macro: https://docs.microsoft.com/en-us/windows-hardware/drivers/ddi/content/ntifs/nf-ntifs-isreparsetagnamesurrogate
+                if (!handle.IsInvalid && (data.dwReserved0 & 0x20000000) == 0 && (data.dwReserved0 & IO_REPARSE_TAG_APPEXECLINK) != IO_REPARSE_TAG_APPEXECLINK)
+                {
+                    return false;
+                }
             }
+#endif
+            return true;
         }
 
         internal static bool WinIsHardLink(FileSystemInfo fileInfo)
@@ -8273,10 +8145,10 @@ namespace Microsoft.PowerShell.Commands
                 {
                     BY_HANDLE_FILE_INFORMATION infoOne;
                     BY_HANDLE_FILE_INFORMATION infoTwo;
-                    if (   GetFileInformationByHandle(sfOne.DangerousGetHandle(), out infoOne)
+                    if (GetFileInformationByHandle(sfOne.DangerousGetHandle(), out infoOne)
                         && GetFileInformationByHandle(sfTwo.DangerousGetHandle(), out infoTwo))
                     {
-                        return    infoOne.VolumeSerialNumber == infoTwo.VolumeSerialNumber
+                        return infoOne.VolumeSerialNumber == infoTwo.VolumeSerialNumber
                                && infoOne.FileIndexHigh == infoTwo.FileIndexHigh
                                && infoOne.FileIndexLow == infoTwo.FileIndexLow;
                     }
@@ -8341,31 +8213,7 @@ namespace Microsoft.PowerShell.Commands
         {
             BY_HANDLE_FILE_INFORMATION handleInfo;
             bool succeeded = InternalSymbolicLinkLinkCodeMethods.GetFileInformationByHandle(handle, out handleInfo);
-
-            if (!succeeded)
-            {
-                int lastError = Marshal.GetLastWin32Error();
-                throw new Win32Exception(lastError);
-            }
-
-            if (handleInfo.NumberOfLinks > 1)
-            {
-                return true;
-            }
-
-            return false;
-        }
-
-        private static string InternalGetTarget(SafeFileHandle handle)
-        {
-            if (Platform.IsWindows)
-            {
-                return WinInternalGetTarget(handle);
-            }
-            else
-            {
-                return Platform.NonWindowsInternalGetTarget(handle);
-            }
+            return succeeded && (handleInfo.NumberOfLinks > 1);
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
@@ -8380,9 +8228,8 @@ namespace Microsoft.PowerShell.Commands
             {
                 int bytesReturned;
 
-                //OACR warning 62001 about using DeviceIOControl has been disabled.
+                // OACR warning 62001 about using DeviceIOControl has been disabled.
                 // According to MSDN guidance DangerousAddRef() and DangerousRelease() have been used.
-
                 handle.DangerousAddRef(ref success);
 
                 bool result = DeviceIoControl(handle.DangerousGetHandle(), FSCTL_GET_REPARSE_POINT,
@@ -8397,29 +8244,39 @@ namespace Microsoft.PowerShell.Commands
                     throw new Win32Exception(lastError);
                 }
 
-                //Unmarshal to symbolic link to look for tags.
-                REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
-
-                if (reparseDataBuffer.ReparseTag != IO_REPARSE_TAG_SYMLINK && reparseDataBuffer.ReparseTag != IO_REPARSE_TAG_MOUNT_POINT)
-                    return null;
-
                 string targetDir = null;
 
-                if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_SYMLINK)
+                REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
+
+                switch (reparseDataBuffer.ReparseTag)
                 {
-                    targetDir = Encoding.Unicode.GetString(reparseDataBuffer.PathBuffer, reparseDataBuffer.SubstituteNameOffset, reparseDataBuffer.SubstituteNameLength);
+                    case IO_REPARSE_TAG_SYMLINK:
+                        targetDir = Encoding.Unicode.GetString(reparseDataBuffer.PathBuffer, reparseDataBuffer.SubstituteNameOffset, reparseDataBuffer.SubstituteNameLength);
+                        break;
+
+                    case IO_REPARSE_TAG_MOUNT_POINT:
+                        REPARSE_DATA_BUFFER_MOUNTPOINT reparseMountPointDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_MOUNTPOINT>(outBuffer);
+                        targetDir = Encoding.Unicode.GetString(reparseMountPointDataBuffer.PathBuffer, reparseMountPointDataBuffer.SubstituteNameOffset, reparseMountPointDataBuffer.SubstituteNameLength);
+                        break;
+
+                    case IO_REPARSE_TAG_APPEXECLINK:
+                        REPARSE_DATA_BUFFER_APPEXECLINK reparseAppExeDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_APPEXECLINK>(outBuffer);
+                        // The target file is at index 2
+                        if (reparseAppExeDataBuffer.StringCount >= 3)
+                        {
+                            string temp = Encoding.Unicode.GetString(reparseAppExeDataBuffer.StringList);
+                            targetDir = temp.Split('\0')[2];
+                        }
+                        break;
+
+                    default:
+                        return null;
                 }
 
-                if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
+                if (targetDir != null && targetDir.StartsWith(NonInterpretedPathPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    //Since this is a junction we need to unmarshal to the correct structure.
-                    REPARSE_DATA_BUFFER_MOUNTPOINT reparseDataBufferMountPoint = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_MOUNTPOINT>(outBuffer);
-
-                    targetDir = Encoding.Unicode.GetString(reparseDataBufferMountPoint.PathBuffer, reparseDataBufferMountPoint.SubstituteNameOffset, reparseDataBufferMountPoint.SubstituteNameLength);
-                }
-
-                if (targetDir.StartsWith(NonInterpretedPathPrefix, StringComparison.OrdinalIgnoreCase))
                     targetDir = targetDir.Substring(NonInterpretedPathPrefix.Length);
+                }
 
                 return targetDir;
             }
@@ -8451,9 +8308,9 @@ namespace Microsoft.PowerShell.Commands
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         private static bool WinCreateJunction(string path, string target)
         {
-            if (!String.IsNullOrEmpty(path))
+            if (!string.IsNullOrEmpty(path))
             {
-                if (!String.IsNullOrEmpty(target))
+                if (!string.IsNullOrEmpty(target))
                 {
                     using (SafeHandle handle = OpenReparsePoint(path, FileDesiredAccess.GenericWrite))
                     {
@@ -8461,12 +8318,12 @@ namespace Microsoft.PowerShell.Commands
 
                         REPARSE_DATA_BUFFER_MOUNTPOINT mountPoint = new REPARSE_DATA_BUFFER_MOUNTPOINT();
                         mountPoint.ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
-                        mountPoint.ReparseDataLength = (ushort)(mountPointBytes.Length + 12); //Added space for the header and null endo
+                        mountPoint.ReparseDataLength = (ushort)(mountPointBytes.Length + 12); // Added space for the header and null endo
                         mountPoint.SubstituteNameOffset = 0;
                         mountPoint.SubstituteNameLength = (ushort)mountPointBytes.Length;
                         mountPoint.PrintNameOffset = (ushort)(mountPointBytes.Length + 2); // 2 as unicode null take 2 bytes.
                         mountPoint.PrintNameLength = 0;
-                        mountPoint.PathBuffer = new byte[0x3FF0]; //Buffer for max size.
+                        mountPoint.PathBuffer = new byte[0x3FF0]; // Buffer for max size.
                         Array.Copy(mountPointBytes, mountPoint.PathBuffer, mountPointBytes.Length);
 
                         int nativeBufferSize = Marshal.SizeOf(mountPoint);
@@ -8479,9 +8336,8 @@ namespace Microsoft.PowerShell.Commands
 
                             int bytesReturned = 0;
 
-                            //OACR warning 62001 about using DeviceIOControl has been disabled.
+                            // OACR warning 62001 about using DeviceIOControl has been disabled.
                             // According to MSDN guidance DangerousAddRef() and DangerousRelease() have been used.
-
                             handle.DangerousAddRef(ref success);
 
                             bool result = DeviceIoControl(handle.DangerousGetHandle(), FSCTL_SET_REPARSE_POINT, nativeBuffer, mountPointBytes.Length + 20, IntPtr.Zero, 0, out bytesReturned, IntPtr.Zero);
@@ -8513,91 +8369,6 @@ namespace Microsoft.PowerShell.Commands
             {
                 throw new ArgumentNullException("path");
             }
-        }
-
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
-        internal static bool DeleteJunction(string junctionPath)
-        {
-            bool result = false;
-
-            if (!String.IsNullOrEmpty(junctionPath))
-            {
-                if (!Platform.IsWindows)
-                {
-                    // For non-Windows platform, treat it as a file.  Just delete it.
-                    try
-                    {
-                        File.Delete(junctionPath);
-                        return true;
-                    }
-                    catch
-                    {
-                        return false;
-                    }
-                }
-
-                using (SafeHandle handle = OpenReparsePoint(junctionPath, FileDesiredAccess.GenericWrite))
-                {
-                    bool success = false;
-                    int inOutBufferSize = Marshal.SizeOf<REPARSE_GUID_DATA_BUFFER>();
-                    IntPtr outBuffer = Marshal.AllocHGlobal(inOutBufferSize);
-                    IntPtr inBuffer = Marshal.AllocHGlobal(inOutBufferSize);
-
-                    try
-                    {
-                        handle.DangerousAddRef(ref success);
-                        IntPtr dangerousHandle = handle.DangerousGetHandle();
-                        int bytesReturned;
-
-                        // Do a FSCTL_GET_REPARSE_POINT first because the ReparseTag could be
-                        // IO_REPARSE_TAG_MOUNT_POINT or IO_REPARSE_TAG_SYMLINK.
-                        // Using the wrong one results in mismatched-tag error.
-
-                        REPARSE_GUID_DATA_BUFFER junctionData = new REPARSE_GUID_DATA_BUFFER();
-                        Marshal.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, outBuffer, false);
-
-                        result = DeviceIoControl(dangerousHandle, FSCTL_GET_REPARSE_POINT, IntPtr.Zero, 0,
-                            outBuffer, inOutBufferSize, out bytesReturned, IntPtr.Zero);
-                        if (!result)
-                        {
-                            int lastError = Marshal.GetLastWin32Error();
-                            throw new Win32Exception(lastError);
-                        }
-
-                        junctionData = Marshal.PtrToStructure<REPARSE_GUID_DATA_BUFFER>(outBuffer);
-                        junctionData.ReparseDataLength = 0;
-                        junctionData.DataBuffer = new char[MAX_REPARSE_SIZE];
-
-                        Marshal.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, inBuffer, false);
-
-                        // To delete a reparse point:
-                        // ReparseDataLength must be 0
-                        // inBufferSize must be REPARSE_GUID_DATA_BUFFER_HEADER_SIZE
-                        result = DeviceIoControl(dangerousHandle, FSCTL_DELETE_REPARSE_POINT, inBuffer, REPARSE_GUID_DATA_BUFFER_HEADER_SIZE, IntPtr.Zero, 0, out bytesReturned, IntPtr.Zero);
-                        if (!result)
-                        {
-                            int lastError = Marshal.GetLastWin32Error();
-                            throw new Win32Exception(lastError);
-                        }
-                    }
-                    finally
-                    {
-                        if (success)
-                        {
-                            handle.DangerousRelease();
-                        }
-
-                        Marshal.FreeHGlobal(outBuffer);
-                        Marshal.FreeHGlobal(inBuffer);
-                    }
-                }
-            }
-            else
-            {
-                throw new ArgumentNullException("junctionPath");
-            }
-
-            return result;
         }
 
         private static SafeFileHandle OpenReparsePoint(string reparsePoint, FileDesiredAccess accessMode)
@@ -8658,14 +8429,14 @@ namespace System.Management.Automation.Internal
     }
 
     /// <summary>
-    /// Provides access to alternate data streams on a file
+    /// Provides access to alternate data streams on a file.
     /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.MSInternal", "CA903:InternalNamespaceShouldNotContainPublicTypes",
         Justification = "Needed by both the FileSystem provider and Unblock-File cmdlet.")]
     public static class AlternateDataStreamUtilities
     {
         /// <summary>
-        /// List all of the streams on a file
+        /// List all of the streams on a file.
         /// </summary>
         /// <param name="path">The fully-qualified path to the file.</param>
         /// <returns>The list of streams (and their size) in the file.</returns>
@@ -8691,15 +8462,15 @@ namespace System.Management.Automation.Internal
 
                     // And trailing :$DATA (as long as it's not the default data stream)
                     string dataStream = ":$DATA";
-                    if (!String.Equals(findStreamData.Name, dataStream, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(findStreamData.Name, dataStream, StringComparison.OrdinalIgnoreCase))
                     {
-                        findStreamData.Name = findStreamData.Name.Replace(dataStream, "");
+                        findStreamData.Name = findStreamData.Name.Replace(dataStream, string.Empty);
                     }
 
                     AlternateStreamData data = new AlternateStreamData();
                     data.Stream = findStreamData.Name;
                     data.Length = findStreamData.Length;
-                    data.FileName = path.Replace(data.Stream, "");
+                    data.FileName = path.Replace(data.Stream, string.Empty);
                     data.FileName = data.FileName.Trim(Utils.Separators.Colon);
 
                     alternateStreams.Add(data);
@@ -8717,7 +8488,7 @@ namespace System.Management.Automation.Internal
         }
 
         /// <summary>
-        /// Creates a file stream on a file
+        /// Creates a file stream on a file.
         /// </summary>
         /// <param name="path">The fully-qualified path to the file.</param>
         /// <param name="streamName">The name of the alternate data stream to open.</param>
@@ -8727,24 +8498,54 @@ namespace System.Management.Automation.Internal
         /// <returns>A FileStream that can be used to interact with the file.</returns>
         internal static FileStream CreateFileStream(string path, string streamName, FileMode mode, FileAccess access, FileShare share)
         {
-            if (path == null) throw new ArgumentNullException("path");
-            if (streamName == null) throw new ArgumentNullException("streamName");
+            if (!TryCreateFileStream(path, streamName, mode, access, share, out var stream))
+            {
+                string errorMessage = StringUtil.Format(
+                    FileSystemProviderStrings.AlternateDataStreamNotFound, streamName, path);
+                throw new FileNotFoundException(errorMessage, $"{path}:{streamName}");
+            }
 
-            string adjustedStreamName = streamName.Trim();
-            adjustedStreamName = ":" + adjustedStreamName;
-            string resultPath = path + adjustedStreamName;
+            return stream;
+        }
 
-            if (mode == FileMode.Append) mode = FileMode.OpenOrCreate;
+        /// <summary>
+        /// Tries to create a file stream on a file.
+        /// </summary>
+        /// <param name="path">The fully-qualified path to the file.</param>
+        /// <param name="streamName">The name of the alternate data stream to open.</param>
+        /// <param name="mode">The FileMode of the file.</param>
+        /// <param name="access">The FileAccess of the file.</param>
+        /// <param name="share">The FileShare of the file.</param>
+        /// <param name="stream">A FileStream that can be used to interact with the file.</param>
+        /// <returns>True if the stream was successfully created, otherwise false.</returns>
+        internal static bool TryCreateFileStream(string path, string streamName, FileMode mode, FileAccess access, FileShare share, out FileStream stream)
+        {
+            if (path == null)
+            {
+                throw new ArgumentNullException(nameof(path));
+            }
+
+            if (streamName == null)
+            {
+                throw new ArgumentNullException(nameof(streamName));
+            }
+
+            if (mode == FileMode.Append)
+            {
+                mode = FileMode.OpenOrCreate;
+            }
+
+            var resultPath = $"{path}:{streamName}";
             SafeFileHandle handle = NativeMethods.CreateFile(resultPath, access, share, IntPtr.Zero, mode, 0, IntPtr.Zero);
 
             if (handle.IsInvalid)
             {
-                string errorMessage = StringUtil.Format(
-                    FileSystemProviderStrings.AlternateDataStreamNotFound, streamName, path);
-                throw new FileNotFoundException(errorMessage, resultPath);
+                stream = null;
+                return false;
             }
 
-            return new FileStream(handle, access);
+            stream = new FileStream(handle, access);
+            return true;
         }
 
         /// <summary>
@@ -8762,13 +8563,10 @@ namespace System.Management.Automation.Internal
             {
                 adjustedStreamName = ":" + adjustedStreamName;
             }
+
             string resultPath = path + adjustedStreamName;
 
-            if (!NativeMethods.DeleteFile(resultPath))
-            {
-                int error = Marshal.GetLastWin32Error();
-                throw new Win32Exception(error);
-            }
+            File.Delete(resultPath);
         }
 
         internal static void SetZoneOfOrigin(string path, SecurityZone securityZone)
@@ -8795,9 +8593,6 @@ namespace System.Management.Automation.Internal
                 FileAccess dwDesiredAccess, FileShare dwShareMode,
                 IntPtr lpSecurityAttributes, FileMode dwCreationDisposition,
                 int dwFlagsAndAttributes, IntPtr hTemplateFile);
-
-            [DllImport(PinvokeDllNames.DeleteFileDllName, CharSet = CharSet.Unicode, SetLastError = true)]
-            internal static extern bool DeleteFile(string lpFileName);
 
             [DllImport(PinvokeDllNames.FindFirstStreamDllName, ExactSpelling = true, CharSet = CharSet.Unicode, SetLastError = true)]
             [SuppressMessage("Microsoft.Globalization", "CA2101:SpecifyMarshalingForPInvokeStringArguments", MessageId = "AlternateStreamNativeData.Name")]
@@ -8870,6 +8665,7 @@ namespace System.Management.Automation.Internal
             [Parameter(ParameterSetName=""PSCopyFileToRemoteSession"")]
             [Parameter(ParameterSetName=""PSCopyAlternateStreamToRemoteSession"")]
             {0}
+
             [string] $copyToFilePath,
 
             [Parameter(ParameterSetName=""PSCopyFileToRemoteSession"", Mandatory=$false)]
@@ -8889,10 +8685,12 @@ namespace System.Management.Automation.Internal
 
             [Parameter(ParameterSetName=""PSTargetSupportsAlternateStreams"", Mandatory=$true)]
             {0}
+
             [string] $supportAltStreamPath,
 
             [Parameter(ParameterSetName=""PSSetFileMetadata"", Mandatory=$true)]
             {0}
+
             [string] $metaDataFilePath,
 
             [Parameter(ParameterSetName=""PSSetFileMetadata"", Mandatory=$true)]
@@ -8901,14 +8699,17 @@ namespace System.Management.Automation.Internal
 
             [Parameter(ParameterSetName=""PSRemoteDestinationPathIsFile"", Mandatory=$true)]
             {0}
+
             [string] $isFilePath,
 
             [Parameter(ParameterSetName=""PSGetRemotePathInfo"", Mandatory=$true)]
             {0}
+
             [string] $remotePath,
 
             [Parameter(ParameterSetName=""PSCreateDirectoryOnRemoteSession"", Mandatory=$true)]
             {0}
+
             [string] $createDirectoryPath,
 
             [Parameter(ParameterSetName=""PSCreateDirectoryOnRemoteSession"")]
@@ -8931,6 +8732,7 @@ namespace System.Management.Automation.Internal
                 Microsoft.PowerShell.Management\Get-ChildItem -LiteralPath ($resolvedPath.Drive.Name + "":"") -Recurse | ForEach-Object {{
                     Microsoft.PowerShell.Management\Get-Item -LiteralPath $_.FullName -Stream * | ForEach-Object {{ $dirSize += $_.Length }}
                 }}
+
                 if (($dirSize + $fragmentLength) -gt $maxUserSize)
                 {{
                     $msg = ""{1}"" -f $maxUserSize
@@ -9114,6 +8916,7 @@ namespace System.Management.Automation.Internal
                 {{
                     $item.LastWriteTimeUtc = $metaDataToSet['LastWriteTimeUtc']
                 }}
+
                 if ($metaDataToSet['LastWriteTime'])
                 {{
                     $item.LastWriteTime = $metaDataToSet['LastWriteTime']
@@ -9326,6 +9129,7 @@ namespace System.Management.Automation.Internal
         param (
             [Parameter(ParameterSetName=""PSCopyFileFromRemoteSession"", Mandatory=$true)]
             {0}
+
             [string] $copyFromFilePath,
 
             [Parameter(ParameterSetName=""PSCopyFileFromRemoteSession"", Mandatory=$true)]
@@ -9348,18 +9152,22 @@ namespace System.Management.Automation.Internal
 
             [Parameter(ParameterSetName=""PSSourceSupportsAlternateStreams"", Mandatory=$true)]
             {0}
+
             [string] $supportAltStreamPath,
 
             [Parameter(ParameterSetName=""PSGetFileMetadata"", Mandatory=$true)]
             {0}
+
             [string] $getMetaFilePath,
 
             [Parameter(ParameterSetName=""PSGetPathItems"", Mandatory=$true)]
             {0}
+
             [string] $getPathItems,
 
             [Parameter(ParameterSetName=""PSGetPathDirAndFiles"", Mandatory=$true)]
             {0}
+
             [string] $getPathDir
         )
 
@@ -9435,6 +9243,7 @@ namespace System.Management.Automation.Internal
                             $op['moreAvailable'] = $true
                         }}
                     }}
+
                     $op
                 }}
                 finally
@@ -9519,6 +9328,7 @@ namespace System.Management.Automation.Internal
                         {{
                             WriteException $e
                         }}
+
                         $finalResult.ExceptionThrown = $true
                     }}
                 }}
@@ -9753,7 +9563,6 @@ namespace System.Management.Automation.Internal
             return $op
         }}
 
-
         #
         # Call helper function based on bound parameter set
         #
@@ -9809,10 +9618,12 @@ namespace System.Management.Automation.Internal
         param (
             [Parameter(ParameterSetName=""PSRemoteDirectoryExist"", Mandatory=$true)]
             {0}
+
             [string] $dirPathExists,
 
             [Parameter(ParameterSetName=""PSValidatePath"", Mandatory=$true)]
             {0}
+
             [string] $pathToValidate,
 
             [Parameter(ParameterSetName=""PSValidatePath"")]
@@ -9829,6 +9640,7 @@ namespace System.Management.Automation.Internal
             )
 
             $result = @{{ Exists = (Microsoft.PowerShell.Management\Test-Path $dirPathExists -PathType Container) }}
+
             return $result
         }}
 

@@ -1,13 +1,14 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
+using System;
+using System.Diagnostics.Eventing.Reader;
+using System.Runtime.InteropServices;
+using System.Security;
+using System.Text;
 
 namespace System.Diagnostics.Eventing
 {
-    using System;
-    using System.Runtime.InteropServices;
-    using System.Security;
-    using System.Text;
-    using System.Diagnostics.Eventing.Reader;
-
     internal static class UnsafeNativeMethods
     {
         private const string FormatMessageDllName = "api-ms-win-core-localization-l1-2-0.dll";
@@ -16,7 +17,6 @@ namespace System.Diagnostics.Eventing
         private static readonly IntPtr s_NULL = IntPtr.Zero;
 
         // WinError.h codes:
-
         internal const int ERROR_SUCCESS = 0x0;
         internal const int ERROR_FILE_NOT_FOUND = 0x2;
         internal const int ERROR_PATH_NOT_FOUND = 0x3;
@@ -60,7 +60,6 @@ namespace System.Diagnostics.Eventing
         internal const int ERROR_RESOURCE_LANG_NOT_FOUND = 0x717;  // 1815
 
         // Event log specific codes:
-
         internal const int ERROR_EVT_MESSAGE_NOT_FOUND = 15027;
         internal const int ERROR_EVT_MESSAGE_ID_NOT_FOUND = 15028;
         internal const int ERROR_EVT_UNRESOLVED_VALUE_INSERT = 15029;
@@ -69,15 +68,11 @@ namespace System.Diagnostics.Eventing
         internal const int ERROR_EVT_MESSAGE_LOCALE_NOT_FOUND = 15033;
         internal const int ERROR_MUI_FILE_NOT_FOUND = 15100;
 
-        //
         // ErrorCode & format
-        //
-
         // for win32 error message formatting
         private const int FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200;
         private const int FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000;
         private const int FORMAT_MESSAGE_ARGUMENT_ARRAY = 0x00002000;
-
 
         [DllImport(FormatMessageDllName, CharSet = CharSet.Unicode, BestFitMapping = false)]
         [SecurityCritical]
@@ -87,7 +82,7 @@ namespace System.Diagnostics.Eventing
 
         // Gets an error message for a Win32 error code.
         [SecurityCritical]
-        internal static String GetMessage(int errorCode)
+        internal static string GetMessage(int errorCode)
         {
             StringBuilder sb = new StringBuilder(512);
             int result = UnsafeNativeMethods.FormatMessage(FORMAT_MESSAGE_IGNORE_INSERTS |
@@ -98,7 +93,7 @@ namespace System.Diagnostics.Eventing
                 // result is the # of characters copied to the StringBuilder on NT,
                 // but on Win9x, it appears to be the number of MBCS buffer.
                 // Just give up and return the String as-is...
-                String s = sb.ToString();
+                string s = sb.ToString();
                 return s;
             }
             else
@@ -107,12 +102,8 @@ namespace System.Diagnostics.Eventing
             }
         }
 
-        //
         // ETW Methods
-        //
-        //
         // Callback
-        //
         [SecurityCritical]
         internal unsafe delegate void EtwEnableCallback(
             [In] ref Guid sourceId,
@@ -124,9 +115,7 @@ namespace System.Diagnostics.Eventing
             [In] void* callbackContext
             );
 
-        //
         // Registration APIs
-        //
         [DllImport(EventProviderDllName, ExactSpelling = true, EntryPoint = "EventRegister", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         [SecurityCritical]
         internal static extern unsafe uint EventRegister(
@@ -140,10 +129,7 @@ namespace System.Diagnostics.Eventing
         [SecurityCritical]
         internal static extern int EventUnregister([In] long registrationHandle);
 
-
-        //
         // Control (Is Enabled) APIs
-        //
         [DllImport(EventProviderDllName, ExactSpelling = true, EntryPoint = "EventEnabled", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         [SecurityCritical]
         internal static extern int EventEnabled([In] long registrationHandle, [In] ref System.Diagnostics.Eventing.EventDescriptor eventDescriptor);
@@ -152,9 +138,7 @@ namespace System.Diagnostics.Eventing
         [SecurityCritical]
         internal static extern int EventProviderEnabled([In] long registrationHandle, [In] byte level, [In] long keywords);
 
-        //
         // Writing (Publishing/Logging) APIs
-        //
         [DllImport(EventProviderDllName, ExactSpelling = true, EntryPoint = "EventWrite", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         [SecurityCritical]
         internal static extern unsafe uint EventWrite(
@@ -164,9 +148,7 @@ namespace System.Diagnostics.Eventing
                 [In] void* userData
                 );
 
-        //
         // Writing (Publishing/Logging) APIs
-        //
         [DllImport(EventProviderDllName, ExactSpelling = true, EntryPoint = "EventWrite", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         [SecurityCritical]
         internal static extern unsafe uint EventWrite(
@@ -195,16 +177,12 @@ namespace System.Diagnostics.Eventing
                 [In] long keywords,
                 [In] char* message
                 );
-        //
         // ActivityId Control APIs
-        //
         [DllImport(EventProviderDllName, ExactSpelling = true, EntryPoint = "EventActivityIdControl", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         [SecurityCritical]
         internal static extern unsafe uint EventActivityIdControl([In] int ControlCode, [In][Out] ref Guid ActivityId);
 
-        //
         // EventLog
-        //
         [Flags]
         internal enum EvtQueryFlags
         {
@@ -216,7 +194,7 @@ namespace System.Diagnostics.Eventing
         }
 
         /// <summary>
-        /// Evt Variant types
+        /// Evt Variant types.
         /// </summary>
         internal enum EvtVariantType
         {
@@ -245,7 +223,7 @@ namespace System.Diagnostics.Eventing
             // these types used internally
             EvtVarTypeEvtHandle = 32,
             EvtVarTypeEvtXml = 35,
-            //Array = 128
+            // Array = 128
             EvtVarTypeStringArray = 129,
             EvtVarTypeUInt32Array = 136
         }
@@ -338,16 +316,16 @@ namespace System.Diagnostics.Eventing
         }
 
         /// <summary>
-        /// The query flags to get information about query
+        /// The query flags to get information about query.
         /// </summary>
         internal enum EvtQueryPropertyId
         {
-            EvtQueryNames = 0,   //String;   //Variant will be array of EvtVarTypeString
-            EvtQueryStatuses = 1 //UInt32;   //Variant will be Array of EvtVarTypeUInt32
+            EvtQueryNames = 0,   // String;   // Variant will be array of EvtVarTypeString
+            EvtQueryStatuses = 1 // UInt32;   // Variant will be Array of EvtVarTypeUInt32
         }
 
         /// <summary>
-        /// Publisher Metadata properties
+        /// Publisher Metadata properties.
         /// </summary>
         internal enum EvtPublisherMetadataPropertyId
         {
@@ -384,8 +362,8 @@ namespace System.Diagnostics.Eventing
             EvtPublisherMetadataKeywords = 25,               // EvtVarTypeEvtHandle, ObjectArray
             EvtPublisherMetadataKeywordName = 26,            // EvtVarTypeString
             EvtPublisherMetadataKeywordValue = 27,           // EvtVarTypeUInt64
-            EvtPublisherMetadataKeywordMessageID = 28//,       // EvtVarTypeUInt32
-            //EvtPublisherMetadataPropertyIdEND
+            EvtPublisherMetadataKeywordMessageID = 28        // EvtVarTypeUInt32
+            // EvtPublisherMetadataPropertyIdEND
         }
 
         internal enum EvtChannelReferenceFlags
@@ -404,10 +382,10 @@ namespace System.Diagnostics.Eventing
             EventMetadataEventKeyword,  // EvtVarTypeUInt64
             EventMetadataEventMessageID,// EvtVarTypeUInt32
             EventMetadataEventTemplate // EvtVarTypeString
-            //EvtEventMetadataPropertyIdEND
+            // EvtEventMetadataPropertyIdEND
         }
 
-        //CHANNEL CONFIGURATION
+        // CHANNEL CONFIGURATION
         internal enum EvtChannelConfigPropertyId
         {
             EvtChannelConfigEnabled = 0,            // EvtVarTypeBoolean
@@ -433,7 +411,7 @@ namespace System.Diagnostics.Eventing
             EvtChannelConfigPropertyIdEND
         }
 
-        //LOG INFORMATION
+        // LOG INFORMATION
         internal enum EvtLogPropertyId
         {
             EvtLogCreationTime = 0,             // EvtVarTypeFileTime
@@ -453,7 +431,7 @@ namespace System.Diagnostics.Eventing
             EvtExportLogTolerateQueryErrors = 0x1000
         }
 
-        //RENDERING
+        // RENDERING
         internal enum EvtRenderContextFlags
         {
             EvtRenderContextValues = 0,      // Render specific properties
@@ -504,7 +482,7 @@ namespace System.Diagnostics.Eventing
             EvtSystemPropertyIdEND
         }
 
-        //SESSION
+        // SESSION
         internal enum EvtLoginClass
         {
             EvtRpcLogin = 1
@@ -524,8 +502,7 @@ namespace System.Diagnostics.Eventing
             public int Flags;
         }
 
-
-        //SEEK
+        // SEEK
         [Flags]
         internal enum EvtSeekFlags
         {
@@ -545,7 +522,7 @@ namespace System.Diagnostics.Eventing
                             [MarshalAs(UnmanagedType.LPWStr)]string query,
                             int flags);
 
-        //SEEK
+        // SEEK
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -590,7 +567,7 @@ namespace System.Diagnostics.Eventing
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool EvtGetEventInfo(
                             EventLogHandle eventHandle,
-                            //int propertyId
+                            // int propertyId
                             [MarshalAs(UnmanagedType.I4)]EvtEventPropertyId propertyId,
                             int bufferSize,
                             IntPtr bufferPtr,
@@ -608,7 +585,7 @@ namespace System.Diagnostics.Eventing
                             ref int bufferRequired
                                             );
 
-        //PUBLISHER METADATA
+        // PUBLISHER METADATA
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtOpenPublisherMetadata(
@@ -631,8 +608,7 @@ namespace System.Diagnostics.Eventing
                             out int publisherMetadataPropertyBufferUsed
                                     );
 
-        //NEW
-
+        // NEW
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -654,7 +630,7 @@ namespace System.Diagnostics.Eventing
                             out int propertyValueBufferUsed
                                             );
 
-        //NEW 2
+        // NEW 2
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtOpenEventMetadataEnum(
@@ -664,7 +640,7 @@ namespace System.Diagnostics.Eventing
 
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
-        //public static extern IntPtr EvtNextEventMetadata(
+        // public static extern IntPtr EvtNextEventMetadata(
         internal static extern EventLogHandle EvtNextEventMetadata(
                             EventLogHandle eventMetadataEnum,
                             int flags
@@ -682,9 +658,7 @@ namespace System.Diagnostics.Eventing
                             out int eventMetadataPropertyBufferUsed
                                    );
 
-
-        //Channel Configuration Native Api
-
+        // Channel Configuration Native Api
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtOpenChannelEnum(
@@ -698,11 +672,10 @@ namespace System.Diagnostics.Eventing
         internal static extern bool EvtNextChannelPath(
                             EventLogHandle channelEnum,
                             int channelPathBufferSize,
-                            //StringBuilder channelPathBuffer,
+                            // StringBuilder channelPathBuffer,
                             [Out, MarshalAs(UnmanagedType.LPWStr)]StringBuilder channelPathBuffer,
                             out int channelPathBufferUsed
                                     );
-
 
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
@@ -737,7 +710,6 @@ namespace System.Diagnostics.Eventing
                             int flags
                                     );
 
-
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -747,7 +719,6 @@ namespace System.Diagnostics.Eventing
                             int flags,
                             ref EvtVariant propertyValue
                                     );
-
 
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
@@ -761,8 +732,7 @@ namespace System.Diagnostics.Eventing
                             out int propertyValueBufferUsed
                                    );
 
-        //Log Information Native Api
-
+        // Log Information Native API
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtOpenLog(
@@ -770,7 +740,6 @@ namespace System.Diagnostics.Eventing
                             [MarshalAs(UnmanagedType.LPWStr)] string path,
                             [MarshalAs(UnmanagedType.I4)]PathType flags
                                     );
-
 
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
@@ -783,8 +752,7 @@ namespace System.Diagnostics.Eventing
                             out int propertyValueBufferUsed
                                     );
 
-        //LOG MANIPULATION
-
+        // LOG MANIPULATION
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -816,13 +784,13 @@ namespace System.Diagnostics.Eventing
                             int flags
                                         );
 
-        //RENDERING
+        // RENDERING
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtCreateRenderContext(
                             Int32 valuePathsCount,
                             [MarshalAs(UnmanagedType.LPArray,ArraySubType = UnmanagedType.LPWStr)]
-                                String[] valuePaths,
+                                string[] valuePaths,
                             [MarshalAs(UnmanagedType.I4)]EvtRenderContextFlags flags
                                     );
 
@@ -839,7 +807,6 @@ namespace System.Diagnostics.Eventing
                             out int propCount
                                         );
 
-
         [DllImport(WEVTAPI, EntryPoint = "EvtRender", CallingConvention = CallingConvention.Winapi, SetLastError = true)]
         [SecurityCritical]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -852,7 +819,6 @@ namespace System.Diagnostics.Eventing
                             out int buffUsed,
                             out int propCount
                                         );
-
 
         [StructLayout(LayoutKind.Explicit, CharSet = CharSet.Unicode)]
         internal struct EvtStringVariant
@@ -895,7 +861,7 @@ namespace System.Diagnostics.Eventing
                              out int bufferUsed
                                         );
 
-        //SESSION
+        // SESSION
         [DllImport(WEVTAPI, CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtOpenSession(
@@ -905,7 +871,7 @@ namespace System.Diagnostics.Eventing
                             int flags
                                         );
 
-        //BOOKMARK
+        // BOOKMARK
         [DllImport(WEVTAPI, EntryPoint = "EvtCreateBookmark", CharSet = CharSet.Unicode, SetLastError = true)]
         [SecurityCritical]
         internal static extern EventLogHandle EvtCreateBookmark(

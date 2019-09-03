@@ -1,13 +1,15 @@
-﻿# no progress output during these tests
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
+# no progress output during these tests
 $ProgressPreference = "SilentlyContinue"
 
 $RepositoryName = 'INTGallery'
-$SourceLocation = 'https://dtlgalleryint.cloudapp.net'
+$SourceLocation = 'https://www.poshtestgallery.com'
 $RegisteredINTRepo = $false
 $ContosoServer = 'ContosoServer'
 $FabrikamServerScript = 'Fabrikam-ServerScript'
 $Initialized = $false
-
 
 #region Utility functions
 
@@ -23,7 +25,7 @@ if(IsInbox)
 {
     $script:ProgramFilesPSPath = Microsoft.PowerShell.Management\Join-Path -Path $env:ProgramFiles -ChildPath "WindowsPowerShell"
 }
-elseif(IsCoreCLR){
+elseif(IsCoreCLR) {
     if(IsWindows) {
         $script:ProgramFilesPSPath = Microsoft.PowerShell.Management\Join-Path -Path $env:ProgramFiles -ChildPath 'PowerShell'
     }
@@ -121,21 +123,21 @@ Describe "PowerShellGet - Module tests" -tags "Feature" {
 
     It "Should find a module correctly" {
         $psgetModuleInfo = Find-Module -Name $ContosoServer -Repository $RepositoryName
-        $psgetModuleInfo.Name | Should Be $ContosoServer
-        $psgetModuleInfo.Repository | Should Be $RepositoryName
+        $psgetModuleInfo.Name | Should -Be $ContosoServer
+        $psgetModuleInfo.Repository | Should -Be $RepositoryName
     }
 
-    It "Should install a module correctly to the required location with CurrentUser scope" {
-        Install-Module -Name $ContosoServer -Repository $RepositoryName -Scope CurrentUser
+    It "Should install a module correctly to the required location with default CurrentUser scope" {
+        Install-Module -Name $ContosoServer -Repository $RepositoryName
         $installedModuleInfo = Get-InstalledModule -Name $ContosoServer
 
-        $installedModuleInfo | Should Not Be $null
-        $installedModuleInfo.Name | Should Be $ContosoServer
-        $installedModuleInfo.InstalledLocation.StartsWith($script:MyDocumentsModulesPath, [System.StringComparison]::OrdinalIgnoreCase) | Should Be $true
+        $installedModuleInfo | Should -Not -BeNullOrEmpty
+        $installedModuleInfo.Name | Should -Be $ContosoServer
+        $installedModuleInfo.InstalledLocation.StartsWith($script:MyDocumentsModulesPath, [System.StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
 
         $module = Get-Module $ContosoServer -ListAvailable
-        $module.Name | Should be $ContosoServer
-        $module.ModuleBase | Should Be $installedModuleInfo.InstalledLocation
+        $module.Name | Should -Be $ContosoServer
+        $module.ModuleBase | Should -Be $installedModuleInfo.InstalledLocation
     }
 
     AfterAll {
@@ -143,7 +145,7 @@ Describe "PowerShellGet - Module tests" -tags "Feature" {
     }
 }
 
-Describe "PowerShellGet - Module tests (Admin)" -tags @('Feature', 'RequireAdminOnWindows') {
+Describe "PowerShellGet - Module tests (Admin)" -Tags @('Feature', 'RequireAdminOnWindows', 'RequireSudoOnUnix') {
 
     BeforeAll {
         if ($script:Initialized -eq $false) {
@@ -156,18 +158,17 @@ Describe "PowerShellGet - Module tests (Admin)" -tags @('Feature', 'RequireAdmin
         Remove-InstalledModules
     }
 
-    ## Marked as 'Pending' on Linux for now because the test requires root privilege but we cannot do it now in our Travis CI Linux build
-    It "Should install a module correctly to the required location with default AllUsers scope" -Pending:$IsLinux {
-        Install-Module -Name $ContosoServer -Repository $RepositoryName
+    It "Should install a module correctly to the required location with AllUsers scope" {
+        Install-Module -Name $ContosoServer -Repository $RepositoryName -Scope AllUsers
         $installedModuleInfo = Get-InstalledModule -Name $ContosoServer
 
-        $installedModuleInfo | Should Not Be $null
-        $installedModuleInfo.Name | Should Be $ContosoServer
-        $installedModuleInfo.InstalledLocation.StartsWith($script:programFilesModulesPath, [System.StringComparison]::OrdinalIgnoreCase) | Should Be $true
+        $installedModuleInfo | Should -Not -BeNullOrEmpty
+        $installedModuleInfo.Name | Should -Be $ContosoServer
+        $installedModuleInfo.InstalledLocation.StartsWith($script:programFilesModulesPath, [System.StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
 
         $module = Get-Module $ContosoServer -ListAvailable
-        $module.Name | Should be $ContosoServer
-        $module.ModuleBase | Should Be $installedModuleInfo.InstalledLocation
+        $module.Name | Should -Be $ContosoServer
+        $module.ModuleBase | Should -Be $installedModuleInfo.InstalledLocation
     }
 
     AfterAll {
@@ -195,17 +196,17 @@ Describe "PowerShellGet - Script tests" -tags "Feature" {
 
     It "Should find a script correctly" {
         $psgetScriptInfo = Find-Script -Name $FabrikamServerScript -Repository $RepositoryName
-        $psgetScriptInfo.Name | Should Be $FabrikamServerScript
-        $psgetScriptInfo.Repository | Should Be $RepositoryName
+        $psgetScriptInfo.Name | Should -Be $FabrikamServerScript
+        $psgetScriptInfo.Repository | Should -Be $RepositoryName
     }
 
-    It "Should install a script correctly to the required location with CurrentUser scope" {
-        Install-Script -Name $FabrikamServerScript -Repository $RepositoryName -Scope CurrentUser -NoPathUpdate
+    It "Should install a script correctly to the required location with default CurrentUser scope" {
+        Install-Script -Name $FabrikamServerScript -Repository $RepositoryName -NoPathUpdate
         $installedScriptInfo = Get-InstalledScript -Name $FabrikamServerScript
 
-        $installedScriptInfo | Should Not Be $null
-        $installedScriptInfo.Name | Should Be $FabrikamServerScript
-        $installedScriptInfo.InstalledLocation.StartsWith($script:MyDocumentsScriptsPath, [System.StringComparison]::OrdinalIgnoreCase) | Should Be $true
+        $installedScriptInfo | Should -Not -BeNullOrEmpty
+        $installedScriptInfo.Name | Should -Be $FabrikamServerScript
+        $installedScriptInfo.InstalledLocation.StartsWith($script:MyDocumentsScriptsPath, [System.StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
     }
 
     AfterAll {
@@ -213,7 +214,7 @@ Describe "PowerShellGet - Script tests" -tags "Feature" {
     }
 }
 
-Describe "PowerShellGet - Script tests (Admin)" -tags @('Feature', 'RequireAdminOnWindows') {
+Describe "PowerShellGet - Script tests (Admin)" -Tags @('Feature', 'RequireAdminOnWindows', 'RequireSudoOnUnix') {
 
     BeforeAll {
         if ($script:Initialized -eq $false) {
@@ -226,14 +227,13 @@ Describe "PowerShellGet - Script tests (Admin)" -tags @('Feature', 'RequireAdmin
         Remove-InstalledScripts
     }
 
-    ## Marked as 'Pending' on Linux for now because the test requires root privilege but we cannot do it now in our Travis CI Linux build
-    It "Should install a script correctly to the required location with default AllUsers scope" -Pending:$IsLinux {
-        Install-Script -Name $FabrikamServerScript -Repository $RepositoryName -NoPathUpdate
+    It "Should install a script correctly to the required location with AllUsers scope" {
+        Install-Script -Name $FabrikamServerScript -Repository $RepositoryName -NoPathUpdate -Scope AllUsers
         $installedScriptInfo = Get-InstalledScript -Name $FabrikamServerScript
 
-        $installedScriptInfo | Should Not Be $null
-        $installedScriptInfo.Name | Should Be $FabrikamServerScript
-        $installedScriptInfo.InstalledLocation.StartsWith($script:ProgramFilesScriptsPath, [System.StringComparison]::OrdinalIgnoreCase) | Should Be $true
+        $installedScriptInfo | Should -Not -BeNullOrEmpty
+        $installedScriptInfo.Name | Should -Be $FabrikamServerScript
+        $installedScriptInfo.InstalledLocation.StartsWith($script:ProgramFilesScriptsPath, [System.StringComparison]::OrdinalIgnoreCase) | Should -BeTrue
     }
 
     AfterAll {
@@ -267,8 +267,8 @@ Describe 'PowerShellGet Type tests' -tags @('CI') {
         $PowerShellGetTypeDetails.GetEnumerator() | ForEach-Object {
             $ClassName = $_.Name
             $Type = "$PowerShellGetNamespace.$ClassName" -as [Type]
-            $Type | Select-Object -ExpandProperty Name | Should Be $ClassName
-            $_.Value | ForEach-Object { $Type.DeclaredMembers.Name -contains $_ | Should Be $true }
+            $Type | Select-Object -ExpandProperty Name | Should -Be $ClassName
+            $_.Value | ForEach-Object { $Type.DeclaredMembers.Name -contains $_ | Should -BeTrue }
         }
     }
 }

@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
 Class WebListener
 {
     [int]$HttpPort
@@ -15,6 +18,67 @@ Class WebListener
 }
 
 [WebListener]$WebListener
+
+function New-ClientCertificate
+{
+    param([string]$CertificatePath, [string]$Password)
+
+    if ($Password)
+    {
+        $Passphrase = ConvertTo-SecureString -Force -AsPlainText $Password
+    }
+
+    $distinguishedName = @{
+        CN = 'adatum.com'
+        C = 'US'
+        S = 'Washington'
+        L = 'Redmond'
+        O = 'A. Datum Corporation'
+        OU = 'R&D'
+        E = 'randd@adatum.com'
+    }
+
+    $certificateParameters = @{
+        OutCertPath = $CertificatePath
+        StartDate = [datetime]::Now.Subtract([timespan]::FromDays(30))
+        Duration = [timespan]::FromDays(365)
+        Passphrase = $Passphrase
+        CertificateFormat = 'Pfx'
+        KeyLength = 4096
+        ForCertificateAuthority = $true
+        Force = $true
+    } + $distinguishedName
+
+    SelfSignedCertificate\New-SelfSignedCertificate @certificateParameters
+}
+
+function New-ServerCertificate
+{
+    param([string]$CertificatePath, [string]$Password)
+
+    if ($Password)
+    {
+        $Passphrase = ConvertTo-SecureString -Force -AsPlainText $Password
+    }
+
+    $distinguishedName = @{
+        CN = 'localhost'
+    }
+
+    $certificateParameters = @{
+        OutCertPath = $CertificatePath
+        StartDate = [datetime]::Now.Subtract([timespan]::FromDays(30))
+        Duration = [timespan]::FromDays(1000)
+        Passphrase = $Passphrase
+        KeyUsage = 'DigitalSignature','KeyEncipherment'
+        EnhancedKeyUsage = 'ServerAuthentication','ClientAuthentication'
+        CertificateFormat = 'Pfx'
+        KeyLength = 2048
+        Force = $true
+    } + $distinguishedName
+
+    SelfSignedCertificate\New-SelfSignedCertificate @certificateParameters
+}
 
 function Get-WebListener
 {
@@ -56,39 +120,61 @@ function Start-WebListener
         }
 
         $initTimeoutSeconds  = 15
-        $appDll              = 'WebListener.dll'
+        $appExe              = (get-command WebListener).Path
         $serverPfx           = 'ServerCert.pfx'
-        $serverPfxPassword   = 'password'
+        $serverPfxPassword   = New-RandomHexString
+        $clientPfx           = 'ClientCert.pfx'
         $initCompleteMessage = 'Now listening on'
+        $sleepMilliseconds   = 100
 
-        $serverPfxPath = Join-Path $MyInvocation.MyCommand.Module.ModuleBase $serverPfx
-        $timeOut = (get-date).AddSeconds($initTimeoutSeconds)
+        $serverPfxPath = Join-Path ([System.IO.Path]::GetTempPath()) $serverPfx
+        $Script:ClientPfxPath = Join-Path ([System.IO.Path]::GetTempPath()) $clientPfx
+        $Script:ClientPfxPassword = New-RandomHexString
+        New-ServerCertificate -CertificatePath $serverPfxPath -Password $serverPfxPassword
+        New-ClientCertificate -CertificatePath $Script:ClientPfxPath -Password $Script:ClientPfxPassword
+
         $Job = Start-Job {
-            $path = Split-Path -parent (get-command WebListener).Path
-            Push-Location $path
-            dotnet $using:appDll $using:serverPfxPath $using:serverPfxPassword $using:HttpPort $using:HttpsPort $using:Tls11Port $using:TlsPort
+            $path = Split-Path -parent (get-command WebListener).Path -Verbose
+            Push-Location $path -Verbose
+            'appEXE: {0}' -f $using:appExe
+            'serverPfxPath: {0}' -f $using:serverPfxPath
+            'serverPfxPassword: {0}' -f $using:serverPfxPassword
+            'HttpPort: {0}' -f $using:HttpPort
+            'Https: {0}' -f $using:HttpsPort
+            'Tls11Port: {0}' -f $using:Tls11Port
+            'TlsPort: {0}' -f $using:TlsPort
+            $env:ASPNETCORE_ENVIRONMENT = 'Development'
+            & $using:appExe $using:serverPfxPath $using:serverPfxPassword $using:HttpPort $using:HttpsPort $using:Tls11Port $using:TlsPort
         }
+
         $Script:WebListener = [WebListener]@{
             HttpPort  = $HttpPort
             HttpsPort = $HttpsPort
             Tls11Port = $Tls11Port
             TlsPort   = $TlsPort
-            Job       = $Job
+            Job   = $Job
         }
-        # Wait until the app is running or until the initTimeoutSeconds have been reached
+
+        # Count iterations of $sleepMilliseconds instead of using system time to work around possible CI VM sleep/delays
+        $sleepCountRemaining = $initTimeoutSeconds * 1000 / $sleepMilliseconds
         do
         {
-            Start-Sleep -Milliseconds 100
+            Start-Sleep -Milliseconds $sleepMilliseconds
             $initStatus = $Job.ChildJobs[0].Output | Out-String
             $isRunning = $initStatus -match $initCompleteMessage
+            $sleepCountRemaining--
         }
-        while (-not $isRunning -and (get-date) -lt $timeOut)
+        while (-not $isRunning -and $sleepCountRemaining -gt 0)
 
         if (-not $isRunning)
         {
-            $Job | Stop-Job -PassThru | Receive-Job
-            $Job | Remove-Job
-            throw 'WebListener did not start before the timeout was reached.'
+            $jobErrors = $Job.ChildJobs[0].Error | Out-String
+            $jobOutput =  $Job.ChildJobs[0].Output | Out-String
+            $jobVerbose =  $Job.ChildJobs[0].Verbose | Out-String
+            $Job | Stop-Job
+            $Job | Remove-Job -Force
+            $message = 'WebListener did not start before the timeout was reached.{0}Errors:{0}{1}{0}Output:{0}{2}{0}Verbose:{0}{3}' -f ([System.Environment]::NewLine), $jobErrors, $jobOutput, $jobVerbose
+            throw $message
         }
         return $Script:WebListener
     }
@@ -112,8 +198,7 @@ function Get-WebListenerClientCertificate {
     [OutputType([System.Security.Cryptography.X509Certificates.X509Certificate2])]
     param()
     process {
-        $pfxPath = Join-Path $MyInvocation.MyCommand.Module.ModuleBase 'ClientCert.pfx'
-        [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath,'password')
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($Script:ClientPfxPath, $Script:ClientPfxPassword)
     }
 }
 
@@ -132,9 +217,11 @@ function Get-WebListenerUrl {
             'Compression',
             'Delay',
             'Delete',
+            'Dos',
             'Encoding',
             'Get',
             'Home',
+            'Link',
             'Multipart',
             'Patch',
             'Post',
@@ -142,6 +229,8 @@ function Get-WebListenerUrl {
             'Redirect',
             'Response',
             'ResponseHeaders',
+            'Resume',
+            'Retry',
             '/'
         )]
         [String]$Test,
@@ -157,7 +246,8 @@ function Get-WebListenerUrl {
             return $null
         }
         $Uri = [System.UriBuilder]::new()
-        $Uri.Host = 'localhost'
+        # Use 127.0.0.1 and not localhost due to https://github.com/dotnet/corefx/issues/24104
+        $Uri.Host = '127.0.0.1'
         $Uri.Port = $runningListener.HttpPort
         $Uri.Scheme = 'Http'
 

@@ -1,4 +1,8 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+
 Import-Module HelpersCommon
+
 #
 # These are general tests that verify non-Windows behavior
 #
@@ -6,23 +10,23 @@ Describe "ExecutionPolicy" -Tags "CI" {
 
     Context "Check Get-ExecutionPolicy behavior" {
         It "Should unrestricted when not on Windows" -Skip:$IsWindows {
-            Get-ExecutionPolicy | Should Be Unrestricted
+            Get-ExecutionPolicy | Should -Be Unrestricted
         }
 
         It "Should return Microsoft.Powershell.ExecutionPolicy PSObject on Windows" -Skip:($IsLinux -Or $IsMacOS) {
-            Get-ExecutionPolicy | Should BeOfType Microsoft.Powershell.ExecutionPolicy
+            Get-ExecutionPolicy | Should -BeOfType Microsoft.Powershell.ExecutionPolicy
         }
     }
 
     Context "Check Set-ExecutionPolicy behavior" {
         It "Should throw PlatformNotSupported when not on Windows" -Skip:$IsWindows {
-            { Set-ExecutionPolicy Unrestricted } | Should Throw "Operation is not supported on this platform."
+            { Set-ExecutionPolicy Unrestricted } | Should -Throw "Operation is not supported on this platform."
         }
 
         It "Should succeed on Windows" -Skip:($IsLinux -Or $IsMacOS) {
             # We use the Process scope to avoid affecting the system
             # Unrestricted is assumed "safe", otherwise these tests would not be running
-            { Set-ExecutionPolicy -Force -Scope Process -ExecutionPolicy Unrestricted } | Should Not Throw
+            { Set-ExecutionPolicy -Force -Scope Process -ExecutionPolicy Unrestricted } | Should -Not -Throw
         }
     }
 }
@@ -43,7 +47,7 @@ try {
     $originalDefaultParameterValues = $PSDefaultParameterValues.Clone()
     $IsNotSkipped = ($IsWindows -eq $true);
     $PSDefaultParameterValues["it:skip"] = !$IsNotSkipped
-    $ShouldSkipTest = !$IsNotSkipped
+    $ShouldSkipTest = !$IsNotSkipped -or !(Test-CanWriteToPsHome)
 
     Describe "Help work with ExecutionPolicy Restricted " -Tags "Feature" {
 
@@ -61,10 +65,10 @@ try {
 
                     # 'Get-Help Get-Disk' should return one result back
                     Set-ExecutionPolicy -ExecutionPolicy Restricted -Force -ErrorAction Stop
-                    (Get-Help -Name Get-Disk -ErrorAction Stop).Name | Should Be 'Get-Disk'
+                    (Get-Help -Name Get-Disk -ErrorAction Stop).Name | Should -Be 'Get-Disk'
                 }
                 catch {
-                    $_.ToString | should be null
+                    $_.ToString | Should -Be null
                 }
                 finally
                 {
@@ -82,7 +86,7 @@ try {
                 $testDirectory =  Join-Path $drive ("MultiMachineTestData\Commands\Cmdlets\Security_TestData\ExecutionPolicyTestData")
                 if(Test-Path $testDirectory)
                 {
-                    Remove-Item -Force -Recurse $testDirectory -ea SilentlyContinue
+                    Remove-Item -Force -Recurse $testDirectory -ErrorAction SilentlyContinue
                 }
                 $null = New-Item $testDirectory -ItemType Directory -Force
                 $remoteTestDirectory = $testDirectory
@@ -478,7 +482,9 @@ ZoneId=$FileType
 
                 foreach($fileInfo in $testFilesInfo)
                 {
-                    createTestFile -FilePath $fileInfo.filePath -FileType $fileInfo.fileType -AddSignature:$fileInfo.AddSignature -Corrupted:$fileInfo.corrupted
+                    if ((Test-CanWriteToPsHome) -or (!(Test-CanWriteToPsHome) -and !$fileInfo.filePath.StartsWith($PSHOME, $true, $null)) ) {
+                        createTestFile -FilePath $fileInfo.filePath -FileType $fileInfo.fileType -AddSignature:$fileInfo.AddSignature -Corrupted:$fileInfo.corrupted
+                    }
                 }
 
                 #Get Execution Policy
@@ -519,8 +525,8 @@ ZoneId=$FileType
                 #Clean up
                 $testDirectory = $remoteTestDirectory
 
-                Remove-Item $testDirectory -Recurse -Force -ea SilentlyContinue
-                Remove-Item function:createTestFile -ea SilentlyContinue
+                Remove-Item $testDirectory -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item function:createTestFile -ErrorAction SilentlyContinue
             }
         }
 
@@ -557,21 +563,9 @@ ZoneId=$FileType
 
                     $scriptName = $testScript
 
-                    $exception = $null
-                    try {
-                        & $scriptName
-                    }
-                    catch
-                    {
-                        $exception = $_
-                    }
+                    $exception = { & $scriptName } | Should -Throw -PassThru
 
-                    $exception.Exception | Should Not BeNullOrEmpty
-
-                    $exceptionType = $exception.Exception.getType()
-                    $result = $exceptionType
-
-                    $result |  Should be "System.Management.Automation.PSSecurityException"
+                    $exception.Exception | Should -BeOfType "System.Management.Automation.PSSecurityException"
                 }
             }
 
@@ -607,8 +601,8 @@ ZoneId=$FileType
                 # Clean up
                 $testDirectory = $remoteTestDirectory
 
-                Remove-Item $testDirectory -Recurse -Force -ea SilentlyContinue
-                Remove-Item function:createTestFile -ea SilentlyContinue
+                Remove-Item $testDirectory -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item function:createTestFile -ErrorAction SilentlyContinue
             }
         }
         Context "Validate that 'Unrestricted' execution policy works on OneCore powershell" {
@@ -636,7 +630,7 @@ ZoneId=$FileType
 
                     $result = & $scriptName
 
-                    $result |  Should be $expected
+                    $result | Should -Be $expected
                 }
             }
 
@@ -660,33 +654,48 @@ ZoneId=$FileType
                 Test-UnrestrictedExecutionPolicy $testScript $expected
             }
 
-            $error = "UnauthorizedAccess,Microsoft.PowerShell.Commands.ImportModuleCommand"
+            $expectedError = "UnauthorizedAccess,Microsoft.PowerShell.Commands.ImportModuleCommand"
+
             $testData = @(
-                @{
-                    module = $PSHomeUntrustedModule
-                    error = $null
-                }
-                @{
-                    module = $PSHomeUnsignedModule
-                    error = $null
-                }
                 @{
                     module = "Microsoft.PowerShell.Archive"
                     error = $null
                 }
             )
 
+            if (Test-CanWriteToPsHome) {
+                $testData += @(
+                    @{
+                        shouldMarkAsPending = $true
+                        module = $PSHomeUntrustedModule
+                        expectedError = $expectedError
+                    }
+                    @{
+                        module = $PSHomeUnsignedModule
+                        error = $null
+                    }
+                )
+            }
+
             $TestTypePrefix = "Test 'Unrestricted' execution policy."
             It "$TestTypePrefix Importing <module> Module should throw '<error>'" -TestCases $testData  {
-                param([string]$module, [string]$error)
-                $testScript = {Import-Module -Name $module -Force}
-                if($error)
+                param([string]$module, [string]$expectedError, [bool]$shouldMarkAsPending)
+
+                if ($shouldMarkAsPending)
                 {
-                    $testScript | ShouldBeErrorId $error
+                    Set-ItResult -Pending -Because "Test is unreliable"
+                }
+
+                $execPolicy = Get-ExecutionPolicy -List | Out-String
+
+                $testScript = {Import-Module -Name $module -Force -ErrorAction Stop}
+                if($expectedError)
+                {
+                    $testScript | Should -Throw -ErrorId $expectedError -Because "Untrusted modules should not be loaded even on unrestricted execution policy"
                 }
                 else
                 {
-                    $testScript | Should Not throw
+                    $testScript | Should -Not -Throw -Because "Execution Policy is set as: $execPolicy"
                 }
             }
         }
@@ -717,7 +726,7 @@ ZoneId=$FileType
                     $result = & $scriptName
                     return $result
 
-                    $result |  Should be $expected
+                    $result | Should -Be $expected
                 }
             }
 
@@ -796,8 +805,8 @@ ZoneId=$FileType
                     $actualResult = $result."result"
                     $actualError = $result."exception"
 
-                    $actualResult |  Should be $expected
-                    $actualError | Should be $error
+                    $actualResult | Should -Be $expected
+                    $actualError | Should -Be $error
                 }
             }
             $message = "Hello"
@@ -909,29 +918,34 @@ ZoneId=$FileType
             $error = "UnauthorizedAccess,Microsoft.PowerShell.Commands.ImportModuleCommand"
             $testData = @(
                 @{
-                    module = $PSHomeUntrustedModule
-                    error = $error
-                }
-                @{
-                    module = $PSHomeUnsignedModule
-                    error = $error
-                }
-                @{
                     module = "Microsoft.PowerShell.Archive"
                     error = $null
                 }
             )
+
+            if (Test-CanWriteToPsHome) {
+                $testData += @(
+                    @{
+                        module = $PSHomeUntrustedModule
+                        error = $error
+                    }
+                    @{
+                        module = $PSHomeUnsignedModule
+                        error = $error
+                    }
+                )
+            }
 
             It "$TestTypePrefix Importing <module> Module should throw '<error>'" -TestCases $testData  {
                 param([string]$module, [string]$error)
                 $testScript = {Import-Module -Name $module -Force}
                 if($error)
                 {
-                    $testScript | ShouldBeErrorId $error
+                    $testScript | Should -Throw -ErrorId $error
                 }
                 else
                 {
-                    $testScript | Should Not throw
+                    {& $testScript} | Should -Not -Throw
                 }
             }
 
@@ -1023,14 +1037,14 @@ ZoneId=$FileType
             )
             It "$TestTypePrefix Running <testScript> Script should throw '<error>'" -TestCases $testData  {
                 param([string]$testScript, [string]$error)
-                $testScript | should exist
+                $testScript | Should -Exist
                 if($error)
                 {
-                    {& $testScript} | ShouldBeErrorId $error
+                    {& $testScript} | Should -Throw -ErrorId $error
                 }
                 else
                 {
-                    {& $testScript} | Should Not throw
+                    {& $testScript} | Should -Not -Throw
                 }
             }
         }
@@ -1042,13 +1056,8 @@ ZoneId=$FileType
             [string]
             $policyScope
         )
-        try {
-            Set-ExecutionPolicy -Scope $policyScope -ExecutionPolicy Restricted
-            throw "No Exception!"
-        }
-        catch {
-            $_.FullyQualifiedErrorId | Should Be "CantSetGroupPolicy,Microsoft.PowerShell.Commands.SetExecutionPolicyCommand"
-        }
+        { Set-ExecutionPolicy -Scope $policyScope -ExecutionPolicy Restricted } |
+            Should -Throw -ErrorId "CantSetGroupPolicy,Microsoft.PowerShell.Commands.SetExecutionPolicyCommand"
     }
 
     function RestoreExecutionPolicy
@@ -1122,12 +1131,12 @@ ZoneId=$FileType
 
         It "-Scope Process is Settable" {
             Set-ExecutionPolicy -Scope Process -ExecutionPolicy ByPass
-            Get-ExecutionPolicy -Scope Process | Should Be "ByPass"
+            Get-ExecutionPolicy -Scope Process | Should -Be "ByPass"
         }
 
         It "-Scope CurrentUser is Settable" {
             Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy ByPass
-            Get-ExecutionPolicy -Scope CurrentUser | Should Be "ByPass"
+            Get-ExecutionPolicy -Scope CurrentUser | Should -Be "ByPass"
         }
     }
 
@@ -1147,7 +1156,7 @@ ZoneId=$FileType
             }
         }
 
-        It '-Scope LocalMachine is Settable, but overridden' {
+        It '-Scope LocalMachine is Settable, but overridden' -Skip:$ShouldSkipTest {
             # In this test, we first setup execution policy in the following way:
             # CurrentUser is specified and takes precedence over LocalMachine.
             # That's why we will get an error, when we are setting up LocalMachine policy.
@@ -1162,26 +1171,21 @@ ZoneId=$FileType
 
             Set-ExecutionPolicy -Scope Process -ExecutionPolicy Undefined
             Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Restricted
-            try
-            {
-                Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy ByPass
-                throw "Expected exception: ExecutionPolicyOverride"
-            }
-            catch [System.Security.SecurityException] {
-                $_.FullyQualifiedErrorId | Should Be 'ExecutionPolicyOverride,Microsoft.PowerShell.Commands.SetExecutionPolicyCommand'
-            }
 
-            Get-ExecutionPolicy -Scope LocalMachine | Should Be "ByPass"
+            { Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy ByPass } |
+                Should -Throw -ErrorId 'ExecutionPolicyOverride,Microsoft.PowerShell.Commands.SetExecutionPolicyCommand'
+
+            Get-ExecutionPolicy -Scope LocalMachine | Should -Be "ByPass"
         }
 
-        It '-Scope LocalMachine is Settable' {
+        It '-Scope LocalMachine is Settable' -Skip:$ShouldSkipTest {
             # We need to make sure that both Process and CurrentUser policies are Undefined
             # before we can set LocalMachine policy without ExecutionPolicyOverride error.
             Set-ExecutionPolicy -Scope Process -ExecutionPolicy Undefined
             Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Undefined
 
             Set-ExecutionPolicy -Scope LocalMachine -ExecutionPolicy ByPass
-            Get-ExecutionPolicy -Scope LocalMachine | Should Be "ByPass"
+            Get-ExecutionPolicy -Scope LocalMachine | Should -Be "ByPass"
         }
     }
 }

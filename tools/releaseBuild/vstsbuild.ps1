@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
 [cmdletbinding(DefaultParameterSetName='Build')]
 param(
     [Parameter(ParameterSetName='packageSigned')]
@@ -65,11 +67,11 @@ End {
         }
 
         $BuildPackagePath = New-PSSignedBuildZip -BuildPath $BuildPath -SignedFilesPath $SignedFilesPath -DestinationFolder $destFolder
-        Write-Host "##vso[artifact.upload containerfolder=results;artifactname=$name-singed.zip]$BuildPackagePath"
+        Write-Verbose -Verbose "New-PSSignedBuildZip returned `$BuildPackagePath as: $BuildPackagePath"
+        Write-Host "##vso[artifact.upload containerfolder=results;artifactname=results]$BuildPackagePath"
         $buildPackageName = Split-Path -Path $BuildPackagePath -Leaf
         $additionalFiles += $BuildPackagePath
     }
-
 
     $psReleaseBranch = 'master'
     $psReleaseFork = 'PowerShell'
@@ -89,14 +91,6 @@ End {
     & $gitBinFullPath clone -b $psReleaseBranch --quiet https://github.com/$psReleaseFork/PSRelease.git $location
 
     Push-Location -Path $PWD.Path
-    try{
-        Set-Location $location
-        & $gitBinFullPath  submodule update --init --recursive --quiet
-    }
-    finally
-    {
-        Pop-Location
-    }
 
     $unresolvedRepoRoot = Join-Path -Path $PSScriptRoot '../..'
     $resolvedRepoRoot = (Resolve-Path -Path $unresolvedRepoRoot).ProviderPath

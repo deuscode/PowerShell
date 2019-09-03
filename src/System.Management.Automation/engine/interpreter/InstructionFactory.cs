@@ -13,12 +13,10 @@
  *
  * ***************************************************************************/
 
-
 using System.Collections.Concurrent;
 using BigInt = System.Numerics.BigInteger;
 using System.Runtime.CompilerServices;
 using System.Threading;
-
 
 namespace System.Management.Automation.Interpreter
 {
@@ -122,6 +120,7 @@ namespace System.Management.Automation.Interpreter
 
                 return _newArrayInit[elementCount] ?? (_newArrayInit[elementCount] = new NewArrayInitInstruction<T>(elementCount));
             }
+
             return new NewArrayInitInstruction<T>(elementCount);
         }
     }

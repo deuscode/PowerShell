@@ -1,22 +1,20 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
-using System.Management.Automation;
-using System.Management.Automation.Internal;
 using System.Collections;
 using System.Collections.Generic;
-using System.Text;
 using System.Diagnostics.CodeAnalysis;
-
+using System.Management.Automation;
+using System.Management.Automation.Internal;
+using System.Text;
 
 namespace Microsoft.PowerShell.Commands.Internal.Format
 {
     /// <summary>
-    /// normalized parameter class to be constructed from the command line parameters
+    /// Normalized parameter class to be constructed from the command line parameters
     /// using the metadata information provided by an instance of CommandParameterDefinition
-    /// it's basically the hash table with the normalized values
+    /// it's basically the hash table with the normalized values.
     /// </summary>
     internal class MshParameter
     {
@@ -41,9 +39,9 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
     }
 
     /// <summary>
-    /// metadata base class for hashtable entry definitions
+    /// Metadata base class for hashtable entry definitions
     /// it contains the key name and the allowable types
-    /// it also provides hooks for type expansion
+    /// it also provides hooks for type expansion.
     /// </summary>
     internal class HashtableEntryDefinition
     {
@@ -115,7 +113,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
     }
 
     /// <summary>
-    /// metadata abstract base class to contain hash entries definitions
+    /// Metadata abstract base class to contain hash entries definitions.
     /// </summary>
     internal abstract class CommandParameterDefinition
     {
@@ -130,14 +128,14 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
         internal virtual MshParameter CreateInstance() { return new MshParameter(); }
 
         /// <summary>
-        /// for a key name, verify it is a legal entry:
+        /// For a key name, verify it is a legal entry:
         ///     1. it must match (partial match allowed)
         ///     2. it must be unambiguous (if partial match)
-        /// If an error condition occurs, an exception will be thrown
+        /// If an error condition occurs, an exception will be thrown.
         /// </summary>
-        /// <param name="keyName">key to verify</param>
-        /// <param name="invocationContext">invocation context for error reporting</param>
-        /// <returns>matching hash table entry</returns>
+        /// <param name="keyName">Key to verify.</param>
+        /// <param name="invocationContext">Invocation context for error reporting.</param>
+        /// <returns>Matching hash table entry.</returns>
         /// <exception cref="ArgumentException"></exception>
         internal HashtableEntryDefinition MatchEntry(string keyName, TerminatingErrorContext invocationContext)
         {
@@ -195,7 +193,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             return false;
         }
 
-
         #region Error Processing
 
         private static void ProcessAmbiguousKey(TerminatingErrorContext invocationContext,
@@ -221,11 +218,10 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
         internal List<HashtableEntryDefinition> hashEntries = new List<HashtableEntryDefinition>();
     }
 
-
     /// <summary>
-    /// engine to process a generic object[] from the command line and
+    /// Engine to process a generic object[] from the command line and
     /// generate a list of MshParameter objects , given the metadata provided by
-    /// a class derived from CommandParameterDefinition
+    /// a class derived from CommandParameterDefinition.
     /// </summary>
     internal sealed class ParameterProcessor
     {
@@ -247,7 +243,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             errorRecord.ErrorDetails = new ErrorDetails(msg);
             invocationContext.ThrowTerminatingError(errorRecord);
         }
-
 
         internal ParameterProcessor(CommandParameterDefinition p)
         {
@@ -337,7 +332,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                 // now the key is verified, need to check the type
                 bool matchType = false;
 
-
                 if (def.AllowedTypes == null || def.AllowedTypes.Length == 0)
                 {
                     // we match on any type, it will be up to the entry to further check
@@ -365,6 +359,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                     // bad type error
                     ProcessIllegalHashTableKeyValue(invocationContext, currentStringKey, e.Value.GetType(), def.AllowedTypes);
                 }
+
                 retVal.Add(def.KeyName, e.Value);
             }
 
@@ -412,7 +407,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
 
         #region Error Processing
 
-
         private static void ProcessUnknownParameterType(TerminatingErrorContext invocationContext, object actualObject, Type[] allowedTypes)
         {
             string allowedTypesList = CatenateTypeArray(allowedTypes);
@@ -428,6 +422,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                 msg = StringUtil.Format(FormatAndOut_MshParameter.NullParameterTypeError,
                     allowedTypesList);
             }
+
             ParameterProcessor.ThrowParameterBindingException(invocationContext, "DictionaryKeyUnknownType", msg);
         }
 
@@ -493,7 +488,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             ParameterProcessor.ThrowParameterBindingException(invocationContext, "DictionaryKeyMandatoryEntry", msg);
         }
 
-
         #endregion
 
         #region Utilities
@@ -505,6 +499,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             {
                 strings[k] = arr[k].FullName;
             }
+
             return CatenateStringArray(strings);
         }
 
@@ -518,8 +513,10 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                 {
                     sb.Append(", ");
                 }
+
                 sb.Append(arr[k]);
             }
+
             sb.Append("}");
             return sb.ToString();
         }

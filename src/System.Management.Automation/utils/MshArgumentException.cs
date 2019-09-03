@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Runtime.Serialization;
 using System.Security.Permissions;
@@ -26,7 +25,7 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSArgumentException class.
         /// </summary>
-        /// <returns> constructed object </returns>
+        /// <returns>Constructed object.</returns>
         public PSArgumentException()
             : base()
         {
@@ -35,8 +34,8 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSArgumentException class.
         /// </summary>
-        /// <param name="message">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="message"></param>
+        /// <returns>Constructed object.</returns>
         /// <remarks>
         /// Per MSDN, the parameter is message.
         /// I confirm this experimentally as well.
@@ -49,9 +48,9 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSArgumentException class.
         /// </summary>
-        /// <param name="paramName">  </param>
-        /// <param name="message">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="paramName"></param>
+        /// <param name="message"></param>
+        /// <returns>Constructed object.</returns>
         /// <remarks>
         /// Note the unusual order of the construction parameters.
         /// ArgumentException has this ctor form and we imitate it here.
@@ -68,9 +67,9 @@ namespace System.Management.Automation
         /// using data serialized via
         /// <see cref="System.Runtime.Serialization.ISerializable"/>
         /// </summary>
-        /// <param name="info"> serialization information </param>
-        /// <param name="context"> streaming context </param>
-        /// <returns> constructed object </returns>
+        /// <param name="info">Serialization information.</param>
+        /// <param name="context">Streaming context.</param>
+        /// <returns>Constructed object.</returns>
         protected PSArgumentException(SerializationInfo info,
                            StreamingContext context)
                 : base(info, context)
@@ -82,8 +81,8 @@ namespace System.Management.Automation
         /// <summary>
         /// Serializer for <see cref="System.Runtime.Serialization.ISerializable"/>
         /// </summary>
-        /// <param name="info"> serialization information </param>
-        /// <param name="context"> streaming context </param>
+        /// <param name="info">Serialization information.</param>
+        /// <param name="context">Streaming context.</param>
         [SecurityPermissionAttribute(SecurityAction.Demand, SerializationFormatter = true)]
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
@@ -101,9 +100,9 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSArgumentException class.
         /// </summary>
-        /// <param name="message">  </param>
-        /// <param name="innerException">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="message"></param>
+        /// <param name="innerException"></param>
+        /// <returns>Constructed object.</returns>
         public PSArgumentException(string message,
                                     Exception innerException)
                 : base(message, innerException)
@@ -113,7 +112,7 @@ namespace System.Management.Automation
         #endregion ctor
 
         /// <summary>
-        /// Additional information about the error
+        /// Additional information about the error.
         /// </summary>
         /// <value></value>
         /// <remarks>
@@ -124,7 +123,7 @@ namespace System.Management.Automation
         {
             get
             {
-                if (null == _errorRecord)
+                if (_errorRecord == null)
                 {
                     _errorRecord = new ErrorRecord(
                         new ParentContainsErrorRecordException(this),
@@ -132,14 +131,16 @@ namespace System.Management.Automation
                         ErrorCategory.InvalidArgument,
                         null);
                 }
+
                 return _errorRecord;
             }
         }
+
         private ErrorRecord _errorRecord;
         private string _errorId = "Argument";
 
         /// <summary>
-        /// see <see cref="System.Exception.Message"/>
+        /// See <see cref="System.Exception.Message"/>
         /// </summary>
         /// <remarks>
         /// Exception.Message is get-only, but you can effectively
@@ -148,9 +149,10 @@ namespace System.Management.Automation
         /// <value></value>
         public override string Message
         {
-            get { return String.IsNullOrEmpty(_message) ? base.Message : _message; }
+            get { return string.IsNullOrEmpty(_message) ? base.Message : _message; }
         }
+
         private string _message;
-    } // PSArgumentException
-} // System.Management.Automation
+    }
+}
 

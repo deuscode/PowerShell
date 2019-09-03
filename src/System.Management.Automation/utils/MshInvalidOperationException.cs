@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Runtime.Serialization;
 using System.Security.Permissions;
@@ -26,7 +25,7 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSInvalidOperationException class.
         /// </summary>
-        /// <returns> constructed object </returns>
+        /// <returns>Constructed object.</returns>
         public PSInvalidOperationException()
             : base()
         {
@@ -38,9 +37,9 @@ namespace System.Management.Automation
         /// using data serialized via
         /// <see cref="System.Runtime.Serialization.ISerializable"/>
         /// </summary>
-        /// <param name="info"> serialization information </param>
-        /// <param name="context"> streaming context </param>
-        /// <returns> constructed object </returns>
+        /// <param name="info">Serialization information.</param>
+        /// <param name="context">Streaming context.</param>
+        /// <returns>Constructed object.</returns>
         protected PSInvalidOperationException(SerializationInfo info,
                            StreamingContext context)
                 : base(info, context)
@@ -51,8 +50,8 @@ namespace System.Management.Automation
         /// <summary>
         /// Serializer for <see cref="System.Runtime.Serialization.ISerializable"/>
         /// </summary>
-        /// <param name="info"> serialization information </param>
-        /// <param name="context"> streaming context </param>
+        /// <param name="info">Serialization information.</param>
+        /// <param name="context">Streaming context.</param>
         [SecurityPermissionAttribute(SecurityAction.Demand, SerializationFormatter = true)]
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
@@ -69,8 +68,8 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSInvalidOperationException class.
         /// </summary>
-        /// <param name="message">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="message"></param>
+        /// <returns>Constructed object.</returns>
         public PSInvalidOperationException(string message)
             : base(message)
         {
@@ -79,9 +78,9 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSInvalidOperationException class.
         /// </summary>
-        /// <param name="message">  </param>
-        /// <param name="innerException">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="message"></param>
+        /// <param name="innerException"></param>
+        /// <returns>Constructed object.</returns>
         public PSInvalidOperationException(string message,
                                             Exception innerException)
                 : base(message, innerException)
@@ -91,12 +90,12 @@ namespace System.Management.Automation
         /// <summary>
         /// Initializes a new instance of the PSInvalidOperationException class.
         /// </summary>
-        /// <param name="message">  </param>
-        /// <param name="innerException">  </param>
-        /// <param name="errorId">  </param>
-        /// <param name="errorCategory">  </param>
-        /// <param name="target">  </param>
-        /// <returns> constructed object </returns>
+        /// <param name="message"></param>
+        /// <param name="innerException"></param>
+        /// <param name="errorId"></param>
+        /// <param name="errorCategory"></param>
+        /// <param name="target"></param>
+        /// <returns>Constructed object.</returns>
         internal PSInvalidOperationException(string message, Exception innerException, string errorId, ErrorCategory errorCategory, object target)
             : base(message, innerException)
         {
@@ -107,7 +106,7 @@ namespace System.Management.Automation
         #endregion ctor
 
         /// <summary>
-        /// Additional information about the error
+        /// Additional information about the error.
         /// </summary>
         /// <value></value>
         /// <remarks>
@@ -118,7 +117,7 @@ namespace System.Management.Automation
         {
             get
             {
-                if (null == _errorRecord)
+                if (_errorRecord == null)
                 {
                     _errorRecord = new ErrorRecord(
                         new ParentContainsErrorRecordException(this),
@@ -126,9 +125,11 @@ namespace System.Management.Automation
                         _errorCategory,
                         _target);
                 }
+
                 return _errorRecord;
             }
         }
+
         private ErrorRecord _errorRecord;
         private string _errorId = "InvalidOperation";
         internal void SetErrorId(string errorId)
@@ -138,6 +139,6 @@ namespace System.Management.Automation
 
         private ErrorCategory _errorCategory = ErrorCategory.InvalidOperation;
         private object _target = null;
-    } // PSInvalidOperationException
-} // System.Management.Automation
+    }
+}
 

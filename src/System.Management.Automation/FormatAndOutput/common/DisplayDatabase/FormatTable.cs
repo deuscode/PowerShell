@@ -1,19 +1,19 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Collections.Concurrent;
-using System.Globalization;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Linq;
-using System.Runtime.Serialization;
-using System.IO;
 using System.Diagnostics.CodeAnalysis;
-using Microsoft.PowerShell.Commands.Internal.Format;
+using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Management.Automation.Host;
 using System.Management.Automation.Internal;
+using System.Runtime.Serialization;
 using System.Security.Permissions;
+
+using Microsoft.PowerShell.Commands.Internal.Format;
 
 namespace System.Management.Automation.Runspaces
 {
@@ -47,8 +47,6 @@ namespace System.Management.Automation.Runspaces
         {
             SetDefaultErrorRecord();
         }
-
-
 
         /// <summary>
         /// This constructor takes a localized message and an inner exception.
@@ -109,8 +107,8 @@ namespace System.Management.Automation.Runspaces
         /// <summary>
         /// Serializes the exception data.
         /// </summary>
-        /// <param name="info"> serialization information </param>
-        /// <param name="context"> streaming context </param>
+        /// <param name="info">Serialization information.</param>
+        /// <param name="context">Streaming context.</param>
         [SecurityPermissionAttribute(SecurityAction.Demand, SerializationFormatter = true)]
         public override void GetObjectData(SerializationInfo info, StreamingContext context)
         {
@@ -121,7 +119,7 @@ namespace System.Management.Automation.Runspaces
 
             base.GetObjectData(info, context);
             // If there are simple fields, serialize them with info.AddValue
-            if (null != _errors)
+            if (_errors != null)
             {
                 int errorCount = _errors.Count;
                 info.AddValue("ErrorCount", errorCount);
@@ -156,7 +154,7 @@ namespace System.Management.Automation.Runspaces
     }
 
     /// <summary>
-    /// A class that keeps the information from format.ps1xml files in a cache table
+    /// A class that keeps the information from format.ps1xml files in a cache table.
     /// </summary>
     [SuppressMessage("Microsoft.Naming", "CA1702:CompoundWordsShouldBeCasedCorrectly", MessageId = "FormatTable")]
     public sealed class FormatTable
@@ -170,7 +168,7 @@ namespace System.Management.Automation.Runspaces
         #region Constructor
 
         /// <summary>
-        /// Default Constructor
+        /// Default Constructor.
         /// </summary>
         internal FormatTable()
         {
@@ -253,7 +251,7 @@ namespace System.Management.Automation.Runspaces
         /// </exception>
         internal FormatTable(IEnumerable<string> formatFiles, AuthorizationManager authorizationManager, PSHost host)
         {
-            if (null == formatFiles)
+            if (formatFiles == null)
             {
                 throw PSTraceSource.NewArgumentNullException("formatFiles");
             }
@@ -269,7 +267,6 @@ namespace System.Management.Automation.Runspaces
         {
             get { return _formatDBMgr; }
         }
-
 
         /// <summary>
         /// Adds the <paramref name="formatFile"/> to the current FormatTable's file list.
@@ -301,7 +298,7 @@ namespace System.Management.Automation.Runspaces
 
         /// <summary>
         /// Returns a format table instance with all default
-        /// format files loaded
+        /// format files loaded.
         /// </summary>
         /// <returns></returns>
         public static FormatTable LoadDefaultFormatFiles()

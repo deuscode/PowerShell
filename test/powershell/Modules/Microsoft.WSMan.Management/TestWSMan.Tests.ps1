@@ -1,4 +1,6 @@
-Describe "TestWSMan tests" -Tags 'Feature' {
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+Describe "TestWSMan tests" -Tags 'Feature','RequireAdminOnWindows' {
 
     BeforeAll {
         $originalDefaultParameterValues = $PSDefaultParameterValues.Clone()
@@ -37,24 +39,25 @@ Describe "TestWSMan tests" -Tags 'Feature' {
         if ($expected -eq $null) {
             $expected = $value
         }
-        $testWsman.$parameter | Should Be $expected
+        $testWsman.$parameter | Should -Be $expected
     }
 
     It "-Authentication for unsupported type should return error" {
-        { Test-WSMan -Authentication foo -ErrorAction Stop } | ShouldBeErrorId "CannotConvertArgumentNoMessage,Microsoft.WSMan.Management.TestWSManCommand"
+        { Test-WSMan -Authentication foo -ErrorAction Stop } | Should -Throw -ErrorId "CannotConvertArgumentNoMessage,Microsoft.WSMan.Management.TestWSManCommand"
     }
 
-    It "Test-WSMan works for '<computername>'" -TestCases @(
-        @{ computername = $null },
-        @{ computername = "localhost" },
-        @{ computername = $env:COMPUTERNAME }
+    It "Test-WSMan works for <testName>" -TestCases @(
+        @{ testName = "Null"; computername = $null },
+        @{ testName = "localhost"; computername = "localhost" },
+        @{ testName = "computername"; computername = $env:COMPUTERNAME }
     ) {
         param($computername)
         $response = Test-WSMan -ComputerName $computername
-        $response.PSObject.TypeNames[0] | Should Be "System.Xml.XmlElement#http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd#IdentifyResponse"
-        $response.wsmid | Should Be "http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd"
-        $response.ProtocolVersion | Should Be "http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"
-        $response.ProductVendor | Should Be "Microsoft Corporation"
-        $response.ProductVersion | Should Be "OS: 0.0.0 SP: 0.0 Stack: 3.0"
+        $response | Should -Not -BeNullOrEmpty
+        $response.PSObject.TypeNames[0] | Should -Be "System.Xml.XmlElement#http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd#IdentifyResponse"
+        $response.wsmid | Should -Be "http://schemas.dmtf.org/wbem/wsman/identity/1/wsmanidentity.xsd"
+        $response.ProtocolVersion | Should -Be "http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd"
+        $response.ProductVendor | Should -Be "Microsoft Corporation"
+        $response.ProductVersion | Should -Be "OS: 0.0.0 SP: 0.0 Stack: 3.0"
     }
 }

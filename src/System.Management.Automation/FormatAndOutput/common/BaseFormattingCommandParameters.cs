@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System;
 using System.Collections;
@@ -21,54 +20,60 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
     {
         /// <summary>
         /// MshParameter collection, as specified by metadata
-        /// the list can be empty of no data is specified
+        /// the list can be empty of no data is specified.
         /// </summary>
         internal List<MshParameter> mshParameterList = new List<MshParameter>();
 
         /// <summary>
-        /// name of the group by property, it can be null
+        /// Name of the group by property, it can be null.
         /// </summary>
         internal MshParameter groupByParameter = null;
 
         /// <summary>
-        /// name of a view from format.ps1xml, it can be null
+        /// Name of a view from format.ps1xml, it can be null.
         /// </summary>
         internal string viewName = null;
 
         /// <summary>
-        /// flag to force a shape even on out of band objects
+        /// Flag to force a shape even on out of band objects.
         /// </summary>
         internal bool forceFormattingAlsoOnOutOfBand = false;
 
         /// <summary>
-        /// autosize formatting flag. If true, the output command is instructed
-        /// to get the "best fit" for the device screen
+        /// Autosize formatting flag. If true, the output command is instructed
+        /// to get the "best fit" for the device screen.
         /// </summary>
-        internal Nullable<bool> autosize = null;
+        internal bool? autosize = null;
 
         /// <summary>
-        /// errors are shown as out of band messages
+        /// If true, the header for a table is repeated after each screen full
+        /// of content.
         /// </summary>
-        internal Nullable<bool> showErrorsAsMessages = null;
+        internal bool repeatHeader = false;
 
         /// <summary>
-        /// errors are shown in the formatted output
+        /// Errors are shown as out of band messages.
         /// </summary>
-        internal Nullable<bool> showErrorsInFormattedOutput = null;
+        internal bool? showErrorsAsMessages = null;
 
         /// <summary>
-        /// expand IEnumerable flag.
+        /// Errors are shown in the formatted output.
         /// </summary>
-        internal Nullable<EnumerableExpansion> expansion = null;
+        internal bool? showErrorsInFormattedOutput = null;
 
         /// <summary>
-        /// extension mechanism for shape specific parameters
+        /// Expand IEnumerable flag.
+        /// </summary>
+        internal EnumerableExpansion? expansion = null;
+
+        /// <summary>
+        /// Extension mechanism for shape specific parameters.
         /// </summary>
         internal ShapeSpecificParameters shapeParameters = null;
     }
 
     /// <summary>
-    /// class to derive from to pass shepe specific data
+    /// Class to derive from to pass shepe specific data.
     /// </summary>
     internal abstract class ShapeSpecificParameters
     {
@@ -76,19 +81,19 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
 
     internal sealed class TableSpecificParameters : ShapeSpecificParameters
     {
-        internal Nullable<bool> hideHeaders = null;
-        internal Nullable<bool> multiLine = null;
+        internal bool? hideHeaders = null;
+        internal bool? multiLine = null;
     }
 
     internal sealed class WideSpecificParameters : ShapeSpecificParameters
     {
-        internal Nullable<int> columns = null;
+        internal int? columns = null;
     }
 
     internal sealed class ComplexSpecificParameters : ShapeSpecificParameters
     {
         /// <summary>
-        /// options for class info display on objects
+        /// Options for class info display on objects.
         /// </summary>
         internal enum ClassInfoDisplay { none, fullName, shortName }
 
@@ -97,7 +102,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
         internal const int maxDepthAllowable = 5;
 
         /// <summary>
-        /// max depth of recursion on sub objects
+        /// Max depth of recursion on sub objects.
         /// </summary>
         internal int maxDepth = maxDepthAllowable;
     }
@@ -107,7 +112,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
     #region MshParameter metadata
 
     /// <summary>
-    /// specialized class for the "expression" property
+    /// Specialized class for the "expression" property.
     /// </summary>
     internal class ExpressionEntryDefinition : HashtableEntryDefinition
     {
@@ -174,7 +179,7 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
             ScriptBlock sb = val as ScriptBlock;
             if (sb != null)
             {
-                MshExpression ex = new MshExpression(sb);
+                PSPropertyExpression ex = new PSPropertyExpression(sb);
                 return ex;
             }
 
@@ -185,14 +190,17 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                 {
                     ProcessEmptyStringError(originalParameterWasHashTable, invocationContext);
                 }
-                MshExpression ex = new MshExpression(s);
+
+                PSPropertyExpression ex = new PSPropertyExpression(s);
                 if (_noGlobbing)
                 {
                     if (ex.HasWildCardCharacters)
                         ProcessGlobbingCharactersError(originalParameterWasHashTable, s, invocationContext);
                 }
+
                 return ex;
             }
+
             PSTraceSource.NewArgumentException("val");
             return null;
         }
@@ -399,13 +407,13 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
                 // this should never happen
                 throw PSTraceSource.NewInvalidOperationException();
             }
+
             return LanguagePrimitives.IsTrue(val);
         }
     }
 
-
     /// <summary>
-    /// definitions for hash table keys
+    /// Definitions for hash table keys.
     /// </summary>
     internal static class FormatParameterDefinitionKeys
     {
@@ -426,7 +434,6 @@ namespace Microsoft.PowerShell.Commands.Internal.Format
         // specific to format-custom (no format string for it, just the name)
         internal const string DepthEntryKey = "depth";
     }
-
 
     internal class FormatGroupByParameterDefinition : CommandParameterDefinition
     {

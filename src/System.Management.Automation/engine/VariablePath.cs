@@ -1,6 +1,5 @@
-/********************************************************************++
-Copyright (c) Microsoft Corporation. All rights reserved.
---********************************************************************/
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
 
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -72,13 +71,11 @@ namespace System.Management.Automation
         /// <summary>
         /// Constructs a scoped item lookup path.
         /// </summary>
-        ///
         /// <param name="path">The path to parse.</param>
         /// <param name="knownFlags">
         /// These flags for anything known about the path (such as, is it a function) before
         /// being scanned.
         /// </param>
-        ///
         /// <exception cref="ArgumentNullException">
         /// If <paramref name="path"/> is null.
         /// </exception>
@@ -136,6 +133,7 @@ namespace System.Management.Automation
                         candidateScopeUpper = "ARIABLE";
                         candidateFlags = VariablePathFlags.Variable;
                     }
+
                     break;
             }
 
@@ -159,6 +157,7 @@ namespace System.Management.Automation
                     {
                         _flags = VariablePathFlags.Variable;
                     }
+
                     _flags |= candidateFlags;
                     lastScannedColon = currentCharIndex;
                     currentCharIndex += 1;
@@ -287,7 +286,7 @@ namespace System.Management.Automation
         }
 
         /// <summary>
-        /// Gets the namespace specific string
+        /// Gets the namespace specific string.
         /// </summary>
         internal string UnqualifiedPath
         {
@@ -320,4 +319,4 @@ namespace System.Management.Automation
         {
         }
     }
-} // namespace System.Management.Automation
+}

@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
 Describe "Windows Installer" -Tags "Scenario" {
 
     BeforeAll {
@@ -31,6 +33,6 @@ Describe "Windows Installer" -Tags "Scenario" {
             }
         }
 
-        $result | Should Not Be $null
+        $result | Should -Not -Be $null
     }
 }
